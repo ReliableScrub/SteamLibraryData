@@ -1,14 +1,15 @@
 from dataclasses import dataclass, field
 
-
 @dataclass
 class Game:
     app_id: int
     name: str
     playtime_minutes: int
-
+    
     genres: list[str] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
+
+    metadata_checked: bool = False
 
     hltb_main: float | None = None
     hltb_main_extra: float | None = None
@@ -18,6 +19,10 @@ class Game:
     hltb_match_name: str | None = None
     hltb_similarity: float | None = None
     hltb_checked: bool = False
+
+    achievement_total: int | None = None
+    achievements_unlocked: int | None = None
+    achievements_checked: bool = False
 
     def preferred_hltb_time(self):
         if self.hltb_completionist:
@@ -45,3 +50,9 @@ class Game:
             return True
 
         return self.hltb_similarity < threshold
+
+    def achievement_percent(self):
+        if not self.achievement_total:
+            return None
+
+        return (self.achievements_unlocked / self.achievement_total) * 100

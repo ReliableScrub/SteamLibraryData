@@ -2,7 +2,7 @@ import requests
 
 from game import Game
 
-def get_owned_games(steam_api_key: str, steam_id: str) -> list[Game]:
+def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
     url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
 
     params = {

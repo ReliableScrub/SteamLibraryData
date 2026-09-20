@@ -4,7 +4,8 @@ from pathlib import Path
 
 from game import Game
 
-CACHE_FILE = Path("data/games.json")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CACHE_FILE = PROJECT_ROOT / "data" / "games.json"
 
 def save_games(games):
     CACHE_FILE.parent.mkdir(exist_ok=True)
@@ -33,6 +34,7 @@ def load_games():
             playtime_minutes=item["playtime_minutes"],
             genres=item.get("genres", []),
             tags=item.get("tags", {}),
+            metadata_checked=item.get("metadata_checked", False),
 
             hltb_main=item.get("hltb_main"),
             hltb_main_extra=item.get("hltb_main_extra"),
@@ -40,7 +42,11 @@ def load_games():
             hltb_all_styles=item.get("hltb_all_styles"),
             hltb_match_name=item.get("hltb_match_name"),
             hltb_similarity=item.get("hltb_similarity"),
-            hltb_checked=item.get("hltb_checked", False)
+            hltb_checked=item.get("hltb_checked", False),
+
+            achievement_total=item.get("achievement_total"),
+            achievements_unlocked=item.get("achievements_unlocked"),
+            achievements_checked=item.get("achievements_checked", False)
         )
         games.append(game)
 
