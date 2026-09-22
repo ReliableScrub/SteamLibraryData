@@ -28,14 +28,21 @@ def load_games():
     games = []
 
     for item in game_data:
+        tags = item.get("tags", {})
+
+        if isinstance(tags, list):
+            tags = {tag: 0 for tag in tags}
+
         game = Game(
             app_id=item["app_id"],
             name=item["name"],
             playtime_minutes=item["playtime_minutes"],
             genres=item.get("genres", []),
-            tags=item.get("tags", {}),
-            metadata_checked=item.get("metadata_checked", False),
-
+            tags=tags,
+            metadata_checked=item.get(
+                "metadata_checked",
+                bool(item.get("genres")) or bool(item.get("tags"))
+            ),
             hltb_main=item.get("hltb_main"),
             hltb_main_extra=item.get("hltb_main_extra"),
             hltb_completionist=item.get("hltb_completionist"),
@@ -43,11 +50,11 @@ def load_games():
             hltb_match_name=item.get("hltb_match_name"),
             hltb_similarity=item.get("hltb_similarity"),
             hltb_checked=item.get("hltb_checked", False),
-
             achievement_total=item.get("achievement_total"),
             achievements_unlocked=item.get("achievements_unlocked"),
             achievements_checked=item.get("achievements_checked", False)
         )
+
         games.append(game)
 
     return games
