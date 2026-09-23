@@ -2,7 +2,7 @@
 
 So my steam library is massive. The original goal was much smaller: read my Steam library, attach HowLongToBeat estimates to the games, and eventually use that information to help decide what to play.
 
-<img src="Before-GUI-Change.png" alt="Before the GUI Change" width="50%">
+<img src="Before-GUI-Change.PNG" alt="Before the GUI Change" width="50%">
 
 ## Steam Library Import
 
@@ -52,6 +52,6 @@ My library in particular contains thousands of games, and genres and tags natura
 
 The whole GUI needed a design, but things could update, but only in batches and everything was created one by one so you update each category bit one by one as well. And my verification for your steam ID was asked at every interval in the terminal, which was fine before I included the GUI, but not so much afterwards.
 
-<img src="Previous-SteamID-Ask.png" alt="Previous Verification" width="50%">
+<img src="Previous-SteamID-Ask.PNG" alt="Previous Verification" width="50%">
 
 Because of the different intervels each API had and the amount of data that could be gotten, I had a few things I had to work on before I went further, hence phase 2.

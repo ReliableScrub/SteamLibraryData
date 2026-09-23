@@ -25,7 +25,7 @@ So, a small `database_info` table was added so the database can remember which S
 
 ## GUI Redesign
 
-<img src="After-GUI-Change.png" alt="After the GUI Change" width="50%">
+<img src="After-GUI-Change.PNG" alt="After the GUI Change" width="50%">
 
 The original GUI worked, but almost every control was stacked vertically.
 
