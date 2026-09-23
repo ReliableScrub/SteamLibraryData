@@ -1,18 +1,22 @@
 import random
 import sys
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QGridLayout, QHBoxLayout, QInputDialog,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QSplitter,QTabWidget, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget
-)
+from datetime import datetime
 
-from backlog import unplayed_games, started_games
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QPixmap, QDesktopServices
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QGridLayout, QHBoxLayout, QInputDialog,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QSplitter, QTabWidget, QVBoxLayout, QWidget, QTableView, QHeaderView
+)
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
+from ui.game_table_model import GameTableModel
+
 from game_updates import update_achievements, update_hltb, update_metadata
 from storage.database import get_database_steam_id, save_game, set_database_steam_id, delete_database, delete_games_not_in
 from storage.image_cache import get_game_image, clear_image_cache
 from api.steam_api import get_owned_games
+from api.store_api import get_trailer_url
 
 BATCH_SIZE = 5
 
@@ -25,6 +29,8 @@ class MainWindow(QMainWindow):
         self.filtered_games = games
         self.steam_api_key = steam_api_key
         self.steam_id = None
+        self.selected_game = None
+        self.current_game_pixmap = None
 
         self.setWindowTitle("Steam Backlog")
         self.resize(1100, 700)
@@ -49,7 +55,15 @@ class MainWindow(QMainWindow):
         self.search_box.textChanged.connect(self.apply_filters)
 
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["All", "Unplayed", "Started"])
+        self.status_filter.addItems([
+            "All",
+            "Backlog",
+            "Playing",
+            "On Hold",
+            "Inactive",
+            "Completed",
+            "Dropped"
+        ])
         self.status_filter.currentTextChanged.connect(self.apply_filters)
 
         self.time_filter = QComboBox()
@@ -68,7 +82,9 @@ class MainWindow(QMainWindow):
             "Shortest HLTB",
             "Longest HLTB",
             "Most Played",
-            "Least Played"
+            "Least Played",
+            "Status",
+            "Last Played"
         ])
         self.sort_filter.currentTextChanged.connect(self.apply_filters)
 
@@ -93,36 +109,78 @@ class MainWindow(QMainWindow):
         self.achievement_button.clicked.connect(self.update_achievement_batch)
 
     def create_game_table(self):
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels([
-            "Game",
-            "Steam Playtime",
-            "HLTB Time",
-            "Achievements"
-        ])
+        self.table = QTableView()
 
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.itemSelectionChanged.connect(self.show_selected_game)
+        self.game_table_model = GameTableModel(self.filtered_games, self)
+        self.table.setModel(self.game_table_model)
 
-        self.table.setColumnWidth(0, 350)
-        self.table.setColumnWidth(1, 120)
-        self.table.setColumnWidth(2, 100)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self.show_selected_game()
+        )
+
+        header = self.table.horizontalHeader()
+
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
 
     def create_game_details(self):
         self.game_image = QLabel("Select a game")
-        self.game_image.setFixedSize(360, 170)
+        self.game_image.setMinimumSize(0, 0)
         self.game_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.game_title = QLabel("No game selected")
         self.game_title.setWordWrap(True)
-        self.game_title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.game_title.setStyleSheet("font-size: 14pt; font-weight: bold;")
+
+        self.status_value = QLabel("No game selected")
+        self.status_value.setStyleSheet("font-size: 10pt;")
+
+        self.manual_status_combo = QComboBox()
+        self.manual_status_combo.addItems([
+            "Automatic",
+            "Completed",
+            "On Hold",
+            "Dropped"
+        ])
+        self.manual_status_combo.setEnabled(False)
+        self.manual_status_combo.currentTextChanged.connect(self.change_manual_status)
 
         self.game_details = QLabel("")
         self.game_details.setWordWrap(True)
+        self.game_details.setStyleSheet("font-size: 11pt;")
         self.game_details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.steam_page_button = QPushButton("Steam Page")
+        self.steam_page_button.setEnabled(False)
+        self.steam_page_button.clicked.connect(self.open_selected_steam_page)
+
+        self.trailer_button = QPushButton("Watch Trailer")
+        self.trailer_button.setEnabled(False)
+        self.trailer_button.clicked.connect(self.open_selected_trailer)
+
+        self.video_widget = QVideoWidget()
+        self.video_widget.setMinimumSize(0, 0)
+        self.video_widget.setVisible(False)
+
+        self.media_player = QMediaPlayer(self)
+        self.audio_output = QAudioOutput(self)
+
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setAudioOutput(self.audio_output)
+
+        self.media_player.errorOccurred.connect(self.handle_video_error)
 
     def create_tabs(self):
         self.tabs = QTabWidget()
@@ -162,8 +220,9 @@ class MainWindow(QMainWindow):
 
         filter_row.addStretch()
 
-        details_panel = QWidget()
-        details_layout = QVBoxLayout(details_panel)
+        self.details_panel = QWidget()
+        self.details_panel.setMinimumWidth(220)
+        details_layout = QVBoxLayout(self.details_panel)
 
         details_layout.addWidget(
             self.game_image,
@@ -171,22 +230,48 @@ class MainWindow(QMainWindow):
         )
 
         details_layout.addWidget(self.game_title)
+
+        self.status_label = QLabel("Status:")
+        self.status_label.setStyleSheet("font-size: 10pt;")
+
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status_label)
+        status_row.addWidget(self.status_value)
+        status_row.addSpacing(8)
+        status_row.addWidget(self.manual_status_combo)
+        status_row.addStretch()
+
+        details_layout.addLayout(status_row)
         details_layout.addWidget(self.game_details)
+
         details_layout.addStretch()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.table)
-        splitter.addWidget(details_panel)
+        details_layout.addWidget(
+            self.video_widget,
+            alignment=Qt.AlignmentFlag.AlignHCenter
+        )
 
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setCollapsible(0, False)
-        splitter.setCollapsible(1, False)
-        splitter.setSizes([700, 350])
+        action_row = QHBoxLayout()
+        action_row.addWidget(self.steam_page_button)
+        action_row.addWidget(self.trailer_button)
+
+        details_layout.addLayout(action_row)
+
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(self.table)
+        self.splitter.addWidget(self.details_panel)
+
+        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setSizes([700, 350])
+
+        self.splitter.splitterMoved.connect(self.update_media_sizes)
 
         layout.addLayout(search_row)
         layout.addLayout(filter_row)
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.splitter, 1)
 
     def create_updates_layout(self):
         layout = QGridLayout(self.updates_tab)
@@ -249,10 +334,11 @@ class MainWindow(QMainWindow):
 
         selected_status = self.status_filter.currentText()
 
-        if selected_status == "Unplayed":
-            filtered_games = unplayed_games(filtered_games)
-        elif selected_status == "Started":
-            filtered_games = started_games(filtered_games)
+        if selected_status != "All":
+            filtered_games = [
+                game for game in filtered_games
+                if game.effective_status() == selected_status
+            ]
 
         selected_time = self.time_filter.currentText()
 
@@ -265,12 +351,19 @@ class MainWindow(QMainWindow):
 
         if selected_time in time_limits:
             max_hours = time_limits[selected_time]
-            filtered_games = [game for game in filtered_games if game.preferred_hltb_time() is not None and game.preferred_hltb_time() <= max_hours]
+            filtered_games = [
+                game for game in filtered_games
+                if game.preferred_hltb_time() is not None
+                and game.preferred_hltb_time() <= max_hours
+            ]
 
         search_text = self.search_box.text().strip().lower()
 
         if search_text:
-            filtered_games = [game for game in filtered_games if search_text in game.name.lower()]
+            filtered_games = [
+                game for game in filtered_games
+                if search_text in game.name.lower()
+            ]
 
         selected_sort = self.sort_filter.currentText()
 
@@ -280,59 +373,76 @@ class MainWindow(QMainWindow):
         elif selected_sort == "Shortest HLTB":
             filtered_games = sorted(
                 filtered_games,
-                key=lambda game: game.preferred_hltb_time() if game.preferred_hltb_time() is not None else float("inf")
+                key=lambda game: game.preferred_hltb_time()
+                if game.preferred_hltb_time() is not None
+                else float("inf")
             )
 
         elif selected_sort == "Longest HLTB":
             filtered_games = sorted(
                 filtered_games,
-                key=lambda game: game.preferred_hltb_time() if game.preferred_hltb_time() is not None else -1,
+                key=lambda game: game.preferred_hltb_time()
+                if game.preferred_hltb_time() is not None
+                else -1,
                 reverse=True
             )
 
         elif selected_sort == "Most Played":
-            filtered_games = sorted(filtered_games, key=lambda game: game.playtime_minutes, reverse=True)
+            filtered_games = sorted(
+                filtered_games,
+                key=lambda game: game.playtime_minutes,
+                reverse=True
+            )
 
         elif selected_sort == "Least Played":
-            filtered_games = sorted(filtered_games, key=lambda game: game.playtime_minutes)
+            filtered_games = sorted(
+                filtered_games,
+                key=lambda game: game.playtime_minutes
+            )
+
+        elif selected_sort == "Status":
+            status_order = {
+                "Backlog": 0,
+                "Playing": 1,
+                "On Hold": 2,
+                "Inactive": 3,
+                "Completed": 4,
+                "Dropped": 5
+            }
+
+            filtered_games = sorted(
+                filtered_games,
+                key=lambda game: (
+                    status_order.get(game.effective_status(), 99),
+                    game.name.lower()
+                )
+            )
+
+        elif selected_sort == "Last Played":
+            filtered_games = sorted(
+                filtered_games,
+                key=lambda game: game.last_played_timestamp or 0,
+                reverse=True
+            )
 
         self.filtered_games = filtered_games
         self.load_games(filtered_games)
 
     def load_games(self, games):
-        self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(len(games))
-
-        for row, game in enumerate(games):
-            playtime_hours = game.playtime_minutes / 60
-            hltb_time = game.preferred_hltb_time()
-
-            if hltb_time is None:
-                hltb_text = "Unknown"
-            else:
-                hltb_text = f"{hltb_time:.1f} h"
-
-            if game.achievement_total is None or game.achievements_unlocked is None:
-                achievement_text = "Unknown"
-            elif game.achievement_total == 0:
-                achievement_text = "None"
-            else:
-                achievement_text = f"{game.achievements_unlocked}/{game.achievement_total}"
-
-            self.table.setItem(row, 0, QTableWidgetItem(game.name))
-            self.table.setItem(row, 1, QTableWidgetItem(f"{playtime_hours:.1f} h"))
-            self.table.setItem(row, 2, QTableWidgetItem(hltb_text))
-            self.table.setItem(row, 3, QTableWidgetItem(achievement_text))
-
-        self.table.setUpdatesEnabled(True)
+        self.game_table_model.set_games(games)
 
     def show_selected_game(self):
-        row = self.table.currentRow()
+        row = self.table.currentIndex().row()
 
-        if row < 0 or row >= len(self.filtered_games):
+        if row < 0:
             return
 
-        game = self.filtered_games[row]
+        game = self.game_table_model.game_at(row)
+
+        if game is None:
+            return
+
+        self.stop_trailer()
 
         self.game_title.setText(game.name)
 
@@ -357,13 +467,51 @@ class MainWindow(QMainWindow):
         tag_names = [tag for tag, weight in sorted_tags[:8]]
         tags = ", ".join(tag_names) if tag_names else "Unknown"
 
+        status_text = game.effective_status()
+
+        last_played_timestamp = game.last_played_timestamp or 0
+
+        if last_played_timestamp > 0:
+            last_played_text = datetime.fromtimestamp(last_played_timestamp).strftime("%b %d, %Y")
+        else:
+            last_played_text = "Never"
+
+        recent_minutes = game.playtime_2weeks_minutes or 0
+
+        if recent_minutes == 0:
+            recent_activity_text = "No recorded playtime"
+        elif recent_minutes >= 60:
+            recent_activity_text = f"{recent_minutes / 60:.1f} hours"
+        else:
+            recent_activity_text = f"{recent_minutes} minutes"
+
+        self.selected_game = game
+
+        self.manual_status_combo.blockSignals(True)
+        self.manual_status_combo.setStyleSheet("font-size: 10pt;")
+
+        if game.manual_status is None:
+            self.manual_status_combo.setCurrentText("Automatic")
+        else:
+            self.manual_status_combo.setCurrentText(game.manual_status)
+
+        self.manual_status_combo.setEnabled(True)
+        self.manual_status_combo.blockSignals(False)
+
+        self.status_value.setFixedWidth(75)
+        self.status_value.setText(status_text)
+
         self.game_details.setText(
+            f"Last played: {last_played_text}\n"
+            f"Last 2 weeks: {recent_activity_text}\n\n"
             f"Steam Playtime: {playtime_hours:.1f} hours\n"
             f"HLTB: {hltb_text}\n"
             f"Achievements: {achievement_text}\n\n"
             f"Genres: {genres}\n\n"
             f"Tags: {tags}"
-        )
+)
+        self.steam_page_button.setEnabled(True)
+        self.trailer_button.setEnabled(True)
 
         try:
             image_path = get_game_image(game.app_id)
@@ -372,16 +520,13 @@ class MainWindow(QMainWindow):
             if pixmap.isNull():
                 raise ValueError("Image could not be loaded.")
 
-            pixmap = pixmap.scaled(
-                self.game_image.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-
+            self.current_game_pixmap = pixmap
             self.game_image.setText("")
-            self.game_image.setPixmap(pixmap)
+
+            self.update_media_sizes()
 
         except Exception as error:
+            self.current_game_pixmap = None
             self.game_image.setPixmap(QPixmap())
             self.game_image.setText("Image unavailable")
             print(f"Image failed for {game.name}: {error}")
@@ -589,6 +734,8 @@ class MainWindow(QMainWindow):
                 if existing_game is not None:
                     existing_game.name = steam_game.name
                     existing_game.playtime_minutes = steam_game.playtime_minutes
+                    existing_game.playtime_2weeks_minutes = steam_game.playtime_2weeks_minutes
+                    existing_game.last_played_timestamp = steam_game.last_played_timestamp
 
                     game = existing_game
                 else:
@@ -629,6 +776,155 @@ class MainWindow(QMainWindow):
 
         if result == QMessageBox.StandardButton.Yes:
             self.refresh_library()
+
+    def change_manual_status(self, selected_status):
+        if self.selected_game is None:
+            return
+
+        game = self.selected_game
+
+        if selected_status == "Automatic":
+            game.manual_status = None
+        else:
+            game.manual_status = selected_status
+
+        save_game(game)
+
+        self.status_value.setText(game.effective_status())
+
+        selected_app_id = game.app_id
+
+        self.apply_filters()
+
+        for row, filtered_game in enumerate(self.filtered_games):
+            if filtered_game.app_id == selected_app_id:
+                self.table.selectRow(row)
+                return
+
+        self.clear_game_details()
+
+    def clear_game_details(self):
+        self.selected_game = None
+        
+        self.stop_trailer()
+
+        self.game_title.setText("No game selected")
+        self.status_value.setText("No game selected")
+        self.game_details.setText("")
+
+        self.game_image.setPixmap(QPixmap())
+        self.game_image.setText("Select a game")
+
+        self.manual_status_combo.blockSignals(True)
+        self.manual_status_combo.setCurrentText("Automatic")
+        self.manual_status_combo.setEnabled(False)
+        self.manual_status_combo.blockSignals(False)
+
+        self.steam_page_button.setEnabled(False)
+        self.trailer_button.setEnabled(False)
+
+        self.current_game_pixmap = None
+
+    def open_selected_steam_page(self):
+        if self.selected_game is None:
+            return
+
+        url = QUrl(f"https://store.steampowered.com/app/{self.selected_game.app_id}/")
+        QDesktopServices.openUrl(url)
+
+    def open_selected_trailer(self):
+        if self.selected_game is None:
+            return
+
+        if self.video_widget.isVisible():
+            self.stop_trailer()
+            return
+
+        self.trailer_button.setEnabled(False)
+        self.trailer_button.setText("Loading...")
+
+        try:
+            trailer_url = get_trailer_url(self.selected_game.app_id)
+
+            if trailer_url is None:
+                QMessageBox.information(
+                    self,
+                    "Trailer",
+                    "No Steam trailer is available for this game."
+                )
+                self.trailer_button.setText("Watch Trailer")
+                return
+
+            self.video_widget.setVisible(True)
+            self.media_player.setSource(QUrl(trailer_url))
+            self.media_player.play()
+
+            self.trailer_button.setText("Stop Trailer")
+
+        except Exception as error:
+            QMessageBox.warning(
+                self,
+                "Trailer",
+                f"Could not load the trailer:\n{error}"
+            )
+            self.trailer_button.setText("Watch Trailer")
+
+        finally:
+            self.trailer_button.setEnabled(True)
+    
+    def handle_video_error(self, error, error_string):
+        if error == QMediaPlayer.Error.NoError:
+            return
+
+        self.stop_trailer()
+
+        QMessageBox.warning(
+            self,
+            "Video Playback",
+            f"The trailer could not be played:\n{error_string}"
+        )
+
+    def stop_trailer(self):
+        self.media_player.stop()
+        self.media_player.setSource(QUrl())
+        self.video_widget.setVisible(False)
+        self.trailer_button.setText("Watch Trailer")
+
+    def update_media_sizes(self):
+        if not hasattr(self, "details_panel"):
+            return
+
+        layout = self.details_panel.layout()
+        margins = layout.contentsMargins()
+
+        available_width = (
+            self.details_panel.contentsRect().width()
+            - margins.left()
+            - margins.right()
+        )
+
+        media_width = min(max(available_width, 1), 650)
+
+        image_height = int(media_width * 215 / 460)
+        video_height = int(media_width * 9 / 16)
+
+        self.game_image.setFixedSize(media_width, image_height)
+        self.video_widget.setFixedSize(media_width, video_height)
+
+        if self.current_game_pixmap is not None:
+            scaled_pixmap = self.current_game_pixmap.scaled(
+                self.game_image.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+            self.game_image.setPixmap(scaled_pixmap)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        if hasattr(self, "details_panel"):
+            QTimer.singleShot(0, self.update_media_sizes)
 
 def run_gui(games, steam_api_key):
     app = QApplication(sys.argv)

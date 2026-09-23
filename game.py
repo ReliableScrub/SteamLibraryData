@@ -5,6 +5,9 @@ class Game:
     app_id: int
     name: str
     playtime_minutes: int
+
+    playtime_2weeks_minutes: int = 0
+    last_played_timestamp: int = 0
     
     genres: list[str] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
@@ -23,6 +26,8 @@ class Game:
     achievement_total: int | None = None
     achievements_unlocked: int | None = None
     achievements_checked: bool = False
+    
+    manual_status: str | None = None
 
     def preferred_hltb_time(self):
         if self.hltb_completionist:
@@ -56,3 +61,29 @@ class Game:
             return None
 
         return (self.achievements_unlocked / self.achievement_total) * 100
+
+    def effective_status(self):
+        achievement_total = self.achievement_total or 0
+        achievements_unlocked = self.achievements_unlocked or 0
+        recent_minutes = self.playtime_2weeks_minutes or 0
+        playtime_minutes = self.playtime_minutes or 0
+
+        if self.manual_status == "Completed":
+            return "Completed"
+
+        if self.manual_status == "Dropped":
+            return "Dropped"
+
+        if self.manual_status == "On Hold":
+            return "On Hold"
+
+        if achievement_total > 0 and achievements_unlocked >= achievement_total:
+            return "Completed"
+
+        if recent_minutes > 0:
+            return "Playing"
+
+        if playtime_minutes == 0:
+            return "Backlog"
+
+        return "Inactive"

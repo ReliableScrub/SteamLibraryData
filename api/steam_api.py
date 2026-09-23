@@ -15,7 +15,7 @@ def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
         "include_played_free_games": True,
     }
 
-    response = requests.get(url, params=params)
+    response = requests.get(url, params=params, timeout=30)
 
     # Check if the request was successful
     response.raise_for_status()
@@ -32,6 +32,8 @@ def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
             app_id=game_data["appid"],
             name=game_data["name"],
             playtime_minutes=game_data.get("playtime_forever", 0),
+            playtime_2weeks_minutes=game_data.get("playtime_2weeks", 0),
+            last_played_timestamp=game_data.get("rtime_last_played", 0),
         )
 
         game_list.append(game)

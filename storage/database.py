@@ -28,6 +28,8 @@ def initialize_database():
                 app_id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 playtime_minutes INTEGER NOT NULL DEFAULT 0,
+                playtime_2weeks_minutes INTEGER NOT NULL DEFAULT 0,
+                last_played_timestamp INTEGER NOT NULL DEFAULT 0,
 
                 metadata_checked INTEGER NOT NULL DEFAULT 0,
 
@@ -41,7 +43,9 @@ def initialize_database():
 
                 achievement_total INTEGER,
                 achievements_unlocked INTEGER,
-                achievements_checked INTEGER NOT NULL DEFAULT 0
+                achievements_checked INTEGER NOT NULL DEFAULT 0,
+
+                manual_status TEXT DEFAULT NULL
             );
 
             --sql
@@ -90,6 +94,8 @@ def initialize_database():
             );
         """)
 
+        ensure_game_columns(connection)
+
 def save_game(game):
     with get_connection() as connection:
         connection.execute("""
@@ -98,6 +104,8 @@ def save_game(game):
                 app_id,
                 name,
                 playtime_minutes,
+                playtime_2weeks_minutes,
+                last_played_timestamp,
                 metadata_checked,
                 hltb_main,
                 hltb_main_extra,
@@ -108,12 +116,15 @@ def save_game(game):
                 hltb_checked,
                 achievement_total,
                 achievements_unlocked,
-                achievements_checked
+                achievements_checked,
+                manual_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(app_id) DO UPDATE SET
                 name = excluded.name,
                 playtime_minutes = excluded.playtime_minutes,
+                playtime_2weeks_minutes = excluded.playtime_2weeks_minutes,
+                last_played_timestamp = excluded.last_played_timestamp,
                 metadata_checked = excluded.metadata_checked,
                 hltb_main = excluded.hltb_main,
                 hltb_main_extra = excluded.hltb_main_extra,
@@ -124,11 +135,14 @@ def save_game(game):
                 hltb_checked = excluded.hltb_checked,
                 achievement_total = excluded.achievement_total,
                 achievements_unlocked = excluded.achievements_unlocked,
-                achievements_checked = excluded.achievements_checked
+                achievements_checked = excluded.achievements_checked,
+                manual_status = excluded.manual_status
         """, (
             game.app_id,
             game.name,
             game.playtime_minutes,
+            game.playtime_2weeks_minutes,
+            game.last_played_timestamp,
             int(game.metadata_checked),
             game.hltb_main,
             game.hltb_main_extra,
@@ -139,7 +153,8 @@ def save_game(game):
             int(game.hltb_checked),
             game.achievement_total,
             game.achievements_unlocked,
-            int(game.achievements_checked)
+            int(game.achievements_checked),
+            game.manual_status
         ))
 
         connection.execute("DELETE FROM game_genres WHERE app_id = ?", (game.app_id,))
@@ -179,6 +194,8 @@ def load_games():
                 app_id,
                 name,
                 playtime_minutes,
+                playtime_2weeks_minutes,
+                last_played_timestamp,
                 metadata_checked,
                 hltb_main,
                 hltb_main_extra,
@@ -189,7 +206,8 @@ def load_games():
                 hltb_checked,
                 achievement_total,
                 achievements_unlocked,
-                achievements_checked
+                achievements_checked,
+                manual_status
             FROM games
         """).fetchall()
 
@@ -216,22 +234,25 @@ def load_games():
             tags = {tag[0]: tag[1] for tag in tag_rows}
 
             game = Game(
-                app_id=row[0],
-                name=row[1],
-                playtime_minutes=row[2],
-                metadata_checked=bool(row[3]),
-                hltb_main=row[4],
-                hltb_main_extra=row[5],
-                hltb_completionist=row[6],
-                hltb_all_styles=row[7],
-                hltb_match_name=row[8],
-                hltb_similarity=row[9],
-                hltb_checked=bool(row[10]),
-                achievement_total=row[11],
-                achievements_unlocked=row[12],
-                achievements_checked=bool(row[13]),
-                genres=genres,
-                tags=tags
+                app_id = row[0],
+                name = row[1],
+                playtime_minutes = row[2],
+                playtime_2weeks_minutes = row[3],
+                last_played_timestamp = row[4],
+                metadata_checked = bool(row[5]),
+                hltb_main = row[6],
+                hltb_main_extra = row[7],
+                hltb_completionist = row[8],
+                hltb_all_styles = row[9],
+                hltb_match_name = row[10],
+                hltb_similarity = row[11],
+                hltb_checked = bool(row[12]),
+                achievement_total = row[13],
+                achievements_unlocked = row[14],
+                achievements_checked = bool(row[15]),
+                genres = genres,
+                tags = tags,
+                manual_status = row[16],
             )
 
             games.append(game)
@@ -292,3 +313,24 @@ def delete_games_not_in(app_ids):
                     "DELETE FROM games WHERE app_id = ?",
                     (app_id,)
                 )
+                
+def ensure_game_columns(conn):
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(games)").fetchall()
+    }
+
+    if "playtime_2weeks_minutes" not in columns:
+        conn.execute(
+            "ALTER TABLE games ADD COLUMN playtime_2weeks_minutes INTEGER NOT NULL DEFAULT 0"
+        )
+
+    if "last_played_timestamp" not in columns:
+        conn.execute(
+            "ALTER TABLE games ADD COLUMN last_played_timestamp INTEGER NOT NULL DEFAULT 0"
+        )
+
+    if "manual_status" not in columns:
+        conn.execute(
+            "ALTER TABLE games ADD COLUMN manual_status TEXT DEFAULT NULL"
+        )
