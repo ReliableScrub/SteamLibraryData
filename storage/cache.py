@@ -7,6 +7,7 @@ from game import Game
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_FILE = PROJECT_ROOT / "data" / "games.json"
 
+
 def save_games(games):
     CACHE_FILE.parent.mkdir(exist_ok=True)
 
@@ -17,6 +18,7 @@ def save_games(games):
 
     with open(CACHE_FILE, "w", encoding="utf-8") as file:
         json.dump(game_data, file, indent=4)
+
 
 def load_games():
     if not CACHE_FILE.exists():
@@ -40,8 +42,7 @@ def load_games():
             genres=item.get("genres", []),
             tags=tags,
             metadata_checked=item.get(
-                "metadata_checked",
-                bool(item.get("genres")) or bool(item.get("tags"))
+                "metadata_checked", bool(item.get("genres")) or bool(item.get("tags"))
             ),
             hltb_main=item.get("hltb_main"),
             hltb_main_extra=item.get("hltb_main_extra"),
@@ -52,7 +53,7 @@ def load_games():
             hltb_checked=item.get("hltb_checked", False),
             achievement_total=item.get("achievement_total"),
             achievements_unlocked=item.get("achievements_unlocked"),
-            achievements_checked=item.get("achievements_checked", False)
+            achievements_checked=item.get("achievements_checked", False),
         )
 
         games.append(game)

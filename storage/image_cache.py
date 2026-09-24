@@ -1,15 +1,17 @@
+import shutil
 from pathlib import Path
 
 import requests
-import shutil
 
 from api.steam_api import get_game_image_url
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 IMAGE_CACHE = PROJECT_ROOT / "data" / "images"
 
+
 def get_cached_image_path(app_id):
     return IMAGE_CACHE / f"{app_id}.jpg"
+
 
 def get_game_image(app_id):
     IMAGE_CACHE.mkdir(parents=True, exist_ok=True)
@@ -27,6 +29,7 @@ def get_game_image(app_id):
     image_path.write_bytes(response.content)
 
     return image_path
+
 
 def clear_image_cache():
     if IMAGE_CACHE.exists():
