@@ -2,8 +2,10 @@ import requests
 
 from game import Game
 
+
 def get_game_image_url(app_id):
     return f"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
+
 
 def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
     url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"

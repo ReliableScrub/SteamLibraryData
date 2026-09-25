@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -27,19 +28,36 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from api.steam_api import get_owned_games
 from api.store_api import get_trailer_url
-from game_updates import update_achievements, update_hltb, update_metadata
+from game_updates import (
+    apply_achievements,
+    apply_hltb,
+    apply_hltb_candidate,
+    apply_metadata,
+    fetch_achievements,
+    fetch_hltb,
+    fetch_metadata,
+    mark_hltb_no_match,
+    update_achievements,
+    update_hltb,
+    update_metadata,
+)
 from storage.database import (
     delete_database,
     delete_games_not_in,
     get_database_steam_id,
+    load_hltb_candidates,
     save_game,
     set_database_steam_id,
 )
 from storage.image_cache import clear_image_cache, get_game_image
 from ui.game_table_model import GameTableModel
-from workers import BatchUpdateWorker, SteamLibraryRefreshWorker
+from workers import (
+    BatchUpdateWorker,
+    ConcurrentResultWorker,
+    ResultBatchWorker,
+    SteamLibraryRefreshWorker,
+)
 
 BATCH_SIZE = 5
 
@@ -64,11 +82,25 @@ class MainWindow(QMainWindow):
         self.batch_update_finished_callback = None
 
         self.combined_update_active = False
-        self.combined_update_stages = []
-        self.combined_stage_offset = 0
-        self.combined_stage_size = 0
         self.combined_update_total = 0
-        self.combined_stage_status_callback = None
+        self.combined_progress = {}
+        self.combined_jobs_remaining = 0
+
+        self.combined_hltb_thread = None
+        self.combined_hltb_worker = None
+
+        self.combined_metadata_thread = None
+        self.combined_metadata_worker = None
+
+        self.combined_achievement_thread = None
+        self.combined_achievement_worker = None
+
+        self.combined_progress_bars = {}
+        self.combined_finished_callbacks = {}
+        self.combined_thread_sources = {}
+
+        self.update_cancel_requested = False
+        self.close_after_updates_stop = False
 
         self.setWindowTitle("Steam Backlog")
         self.resize(1100, 700)
@@ -98,6 +130,19 @@ class MainWindow(QMainWindow):
             ["All", "Backlog", "Playing", "On Hold", "Inactive", "Completed", "Dropped"]
         )
         self.status_filter.currentTextChanged.connect(self.apply_filters)
+
+        self.hltb_metric_filter = QComboBox()
+
+        self.hltb_metric_filter.addItems(
+            [
+                "Main Story",
+                "Main + Extra",
+                "Completionist",
+                "All Styles",
+            ]
+        )
+
+        self.hltb_metric_filter.currentTextChanged.connect(self.apply_filters)
 
         self.time_filter = QComboBox()
         self.time_filter.addItems(
@@ -146,6 +191,10 @@ class MainWindow(QMainWindow):
         self.hltb_progress.setVisible(False)
         self.hltb_progress.setFormat("%v / %m")
 
+        self.hltb_review_button = QPushButton("Review HLTB Matches")
+        self.hltb_review_button.clicked.connect(self.review_hltb_matches)
+        self.hltb_review_button.setEnabled(False)
+
         self.metadata_status = QLabel()
         self.metadata_button = QPushButton("Update Genre / Tag Data")
         self.metadata_button.clicked.connect(self.update_metadata_batch)
@@ -163,6 +212,10 @@ class MainWindow(QMainWindow):
         self.update_all_status = QLabel("Missing Data")
         self.update_all_button = QPushButton("Update Missing Data")
         self.update_all_button.clicked.connect(self.update_all_missing_data)
+
+        self.cancel_updates_button = QPushButton("Cancel Updates")
+        self.cancel_updates_button.clicked.connect(self.cancel_updates)
+        self.cancel_updates_button.setEnabled(False)
 
         self.update_all_progress = QProgressBar()
         self.update_all_progress.setVisible(False)
@@ -266,6 +319,9 @@ class MainWindow(QMainWindow):
         filter_row.addWidget(QLabel("Status:"))
         filter_row.addWidget(self.status_filter)
 
+        filter_row.addWidget(QLabel("HLTB Metric:"))
+        filter_row.addWidget(self.hltb_metric_filter)
+
         filter_row.addWidget(QLabel("Length:"))
         filter_row.addWidget(self.time_filter)
 
@@ -330,7 +386,11 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.update_all_status, 0, 0)
         layout.addWidget(self.update_all_progress, 0, 1)
-        layout.addWidget(self.update_all_button, 0, 2)
+
+        update_all_buttons = QHBoxLayout()
+        update_all_buttons.addWidget(self.update_all_button)
+        update_all_buttons.addWidget(self.cancel_updates_button)
+        layout.addLayout(update_all_buttons, 0, 2)
 
         layout.addWidget(self.library_status, 1, 0)
         layout.addWidget(self.library_progress, 1, 1)
@@ -338,7 +398,11 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.hltb_status, 2, 0)
         layout.addWidget(self.hltb_progress, 2, 1)
-        layout.addWidget(self.hltb_button, 2, 2)
+
+        hltb_buttons = QHBoxLayout()
+        hltb_buttons.addWidget(self.hltb_button)
+        hltb_buttons.addWidget(self.hltb_review_button)
+        layout.addLayout(hltb_buttons, 2, 2)
 
         layout.addWidget(self.metadata_status, 3, 0)
         layout.addWidget(self.metadata_progress, 3, 1)
@@ -379,7 +443,12 @@ class MainWindow(QMainWindow):
     def apply_filters(self):
         filtered_games = self.games
 
+        selected_hltb_metric = self.hltb_metric_filter.currentText()
+
+        self.game_table_model.set_hltb_metric(selected_hltb_metric)
+
         selected_status = self.status_filter.currentText()
+        selected_time = self.time_filter.currentText()
 
         if selected_status != "All":
             filtered_games = [
@@ -387,8 +456,6 @@ class MainWindow(QMainWindow):
                 for game in filtered_games
                 if game.effective_status() == selected_status
             ]
-
-        selected_time = self.time_filter.currentText()
 
         time_limits = {
             "Under 5 Hours": 5,
@@ -399,11 +466,12 @@ class MainWindow(QMainWindow):
 
         if selected_time in time_limits:
             max_hours = time_limits[selected_time]
+
             filtered_games = [
                 game
                 for game in filtered_games
-                if game.preferred_hltb_time() is not None
-                and game.preferred_hltb_time() <= max_hours
+                if self.current_hltb_time(game) is not None
+                and self.current_hltb_time(game) <= max_hours
             ]
 
         search_text = self.search_box.text().strip().lower()
@@ -422,8 +490,8 @@ class MainWindow(QMainWindow):
             filtered_games = sorted(
                 filtered_games,
                 key=lambda game: (
-                    game.preferred_hltb_time()
-                    if game.preferred_hltb_time() is not None
+                    self.current_hltb_time(game)
+                    if self.current_hltb_time(game) is not None
                     else float("inf")
                 ),
             )
@@ -432,8 +500,8 @@ class MainWindow(QMainWindow):
             filtered_games = sorted(
                 filtered_games,
                 key=lambda game: (
-                    game.preferred_hltb_time()
-                    if game.preferred_hltb_time() is not None
+                    self.current_hltb_time(game)
+                    if self.current_hltb_time(game) is not None
                     else -1
                 ),
                 reverse=True,
@@ -496,7 +564,8 @@ class MainWindow(QMainWindow):
         self.game_title.setText(game.name)
 
         playtime_hours = game.playtime_minutes / 60
-        hltb_time = game.preferred_hltb_time()
+        hltb_metric = self.hltb_metric_filter.currentText()
+        hltb_time = game.hltb_time(hltb_metric)
 
         if hltb_time is None:
             hltb_text = "Unknown"
@@ -556,7 +625,7 @@ class MainWindow(QMainWindow):
             f"Last played: {last_played_text}\n"
             f"Last 2 weeks: {recent_activity_text}\n\n"
             f"Steam Playtime: {playtime_hours:.1f} hours\n"
-            f"HLTB: {hltb_text}\n"
+            f"HLTB ({hltb_metric}): {hltb_text}\n"
             f"Achievements: {achievement_text}\n\n"
             f"Genres: {genres}\n\n"
             f"Tags: {tags}"
@@ -590,14 +659,97 @@ class MainWindow(QMainWindow):
             return
 
         game = random.choice(self.filtered_games)
-        hltb_time = game.preferred_hltb_time()
+        hltb_time = self.current_hltb_time(game)
+        hltb_metric = self.hltb_metric_filter.currentText()
 
         if hltb_time is None:
             time_text = "Unknown completion time"
         else:
-            time_text = f"{hltb_time:.1f} hours"
+            time_text = f"{hltb_metric}: {hltb_time:.1f} hours"
 
         QMessageBox.information(self, "Play This", f"{game.name}\n\n{time_text}")
+
+    def start_result_update(
+        self,
+        games,
+        fetcher,
+        task_name,
+        action_text,
+        status_label,
+        progress_bar,
+        result_handler,
+        finished_status_callback,
+        thread_attr,
+        worker_attr,
+        concurrent=False,
+    ):
+        progress_bar.setRange(0, len(games))
+        progress_bar.setValue(0)
+        progress_bar.setVisible(True)
+
+        thread = QThread()
+
+        if concurrent:
+            worker = ConcurrentResultWorker(
+                games,
+                fetcher,
+                task_name,
+                action_text,
+                max_workers=1,
+            )
+        else:
+            worker = ResultBatchWorker(
+                games,
+                fetcher,
+                task_name,
+                action_text,
+            )
+
+        setattr(self, thread_attr, thread)
+        setattr(self, worker_attr, worker)
+
+        self.combined_progress_bars[task_name] = progress_bar
+        self.combined_finished_callbacks[task_name] = finished_status_callback
+        self.combined_thread_sources[thread] = (
+            task_name,
+            thread_attr,
+            worker_attr,
+        )
+
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+
+        worker.status_changed.connect(status_label.setText)
+        worker.progress_changed.connect(self.update_combined_source_progress)
+        worker.result_ready.connect(result_handler)
+        worker.item_failed.connect(self.batch_update_failed)
+
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+
+        thread.finished.connect(self.combined_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+
+        thread.start()
+
+    def update_combined_source_progress(
+        self,
+        source_name,
+        completed,
+        total,
+    ):
+        progress_bar = self.combined_progress_bars.get(source_name)
+
+        if progress_bar is not None:
+            progress_bar.setRange(0, total)
+            progress_bar.setValue(completed)
+
+        self.combined_progress[source_name] = completed
+
+        overall_completed = sum(self.combined_progress.values())
+
+        self.update_all_progress.setValue(overall_completed)
 
     def start_batch_update(
         self,
@@ -612,6 +764,7 @@ class MainWindow(QMainWindow):
         if self.batch_update_thread is not None:
             return
 
+        self.update_cancel_requested = False
         self.set_update_buttons_enabled(False)
 
         progress_bar.setRange(0, len(games))
@@ -652,10 +805,6 @@ class MainWindow(QMainWindow):
             self.batch_update_progress.setRange(0, total)
             self.batch_update_progress.setValue(completed)
 
-        if self.combined_update_active:
-            overall_completed = self.combined_stage_offset + completed
-            self.update_all_progress.setValue(overall_completed)
-
     def batch_update_failed(self, error_message):
         print(error_message)
 
@@ -676,12 +825,30 @@ class MainWindow(QMainWindow):
             finished_callback()
 
         if self.batch_update_thread is None and not self.combined_update_active:
+            if self.update_cancel_requested:
+                self.update_all_status.setText("Update cancelled.")
+
+            self.update_cancel_requested = False
             self.set_update_buttons_enabled(True)
 
     def update_hltb_status(self):
-        checked = sum(1 for game in self.games if game.hltb_checked)
-        total = len(self.games)
-        self.hltb_status.setText(f"HLTB: {checked} / {total} checked")
+        matched = sum(1 for game in self.games if game.hltb_match_status == "matched")
+
+        review = sum(1 for game in self.games if game.hltb_match_status == "review")
+
+        no_match = sum(1 for game in self.games if game.hltb_match_status == "no_match")
+
+        pending = sum(1 for game in self.games if not game.hltb_checked)
+
+        self.hltb_status.setText(
+            f"HLTB: "
+            f"{matched} matched | "
+            f"{review} review | "
+            f"{no_match} no match | "
+            f"{pending} pending"
+        )
+
+        self.hltb_review_button.setEnabled(review > 0 and not self.updates_running())
 
     def update_hltb_batch(self):
         games = [game for game in self.games if not game.hltb_checked]
@@ -703,6 +870,28 @@ class MainWindow(QMainWindow):
             progress_bar=self.hltb_progress,
             finished_callback=self.update_hltb_status,
         )
+
+    def review_hltb_matches(self):
+        review_games = [
+            game for game in self.games if game.hltb_match_status == "review"
+        ]
+
+        if not review_games:
+            QMessageBox.information(
+                self,
+                "HLTB Review",
+                "There are no HLTB matches waiting for review.",
+            )
+            return
+
+        for game in review_games:
+            action = self.review_single_hltb_game(game)
+
+            if action == "close":
+                break
+
+        self.update_hltb_status()
+        self.apply_filters()
 
     def update_metadata_status(self):
         checked = sum(1 for game in self.games if game.metadata_checked)
@@ -829,10 +1018,13 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def update_all_missing_data(self):
-        if (
-            self.batch_update_thread is not None
-            or self.steam_refresh_thread is not None
-        ):
+        if self.combined_update_active:
+            return
+
+        if self.batch_update_thread is not None:
+            return
+
+        if self.steam_refresh_thread is not None:
             return
 
         hltb_games = [game for game in self.games if not game.hltb_checked]
@@ -845,7 +1037,9 @@ class MainWindow(QMainWindow):
 
         if not hltb_games and not metadata_games and not achievement_games:
             QMessageBox.information(
-                self, "Missing Data", "All games have already been checked."
+                self,
+                "Missing Data",
+                "All games have already been checked.",
             )
             return
 
@@ -857,109 +1051,174 @@ class MainWindow(QMainWindow):
             if steam_id is None:
                 return
 
-        self.combined_update_stages = []
+        self.update_cancel_requested = False
+        self.combined_update_active = True
+
+        self.combined_update_total = (
+            len(hltb_games) + len(metadata_games) + len(achievement_games)
+        )
+
+        self.combined_progress = {}
 
         if hltb_games:
-            self.combined_update_stages.append(
-                (
-                    hltb_games,
-                    update_hltb,
-                    "HLTB",
-                    "Searching HLTB for",
-                    self.hltb_status,
-                    self.hltb_progress,
-                    self.update_hltb_status,
-                )
+            self.combined_progress["HLTB"] = 0
+
+        if metadata_games:
+            self.combined_progress["Metadata"] = 0
+
+        if achievement_games:
+            self.combined_progress["Achievements"] = 0
+
+        self.combined_jobs_remaining = len(self.combined_progress)
+
+        self.update_all_progress.setRange(
+            0,
+            self.combined_update_total,
+        )
+        self.update_all_progress.setValue(0)
+        self.update_all_progress.setVisible(True)
+
+        self.update_all_status.setText("Missing Data: Updating...")
+
+        self.set_update_buttons_enabled(False)
+
+        if hltb_games:
+            self.start_result_update(
+                games=hltb_games,
+                fetcher=fetch_hltb,
+                task_name="HLTB",
+                action_text="Searching HLTB for",
+                status_label=self.hltb_status,
+                progress_bar=self.hltb_progress,
+                result_handler=self.handle_hltb_result,
+                finished_status_callback=self.update_hltb_status,
+                thread_attr="combined_hltb_thread",
+                worker_attr="combined_hltb_worker",
+                concurrent=True,
             )
 
         if metadata_games:
-            self.combined_update_stages.append(
-                (
-                    metadata_games,
-                    update_metadata,
-                    "Metadata",
-                    "Getting metadata for",
-                    self.metadata_status,
-                    self.metadata_progress,
-                    self.update_metadata_status,
-                )
+            self.start_result_update(
+                games=metadata_games,
+                fetcher=fetch_metadata,
+                task_name="Metadata",
+                action_text="Getting metadata for",
+                status_label=self.metadata_status,
+                progress_bar=self.metadata_progress,
+                result_handler=self.handle_metadata_result,
+                finished_status_callback=self.update_metadata_status,
+                thread_attr="combined_metadata_thread",
+                worker_attr="combined_metadata_worker",
             )
 
         if achievement_games:
             steam_api_key = self.steam_api_key
 
-            def achievement_updater(game):
-                update_achievements(game, steam_id, steam_api_key)
-
-            self.combined_update_stages.append(
-                (
-                    achievement_games,
-                    achievement_updater,
-                    "Achievements",
-                    "Checking achievements for",
-                    self.achievement_status,
-                    self.achievement_progress,
-                    self.update_achievement_status,
+            def achievement_fetcher(game):
+                return fetch_achievements(
+                    game,
+                    steam_id,
+                    steam_api_key,
                 )
+
+            self.start_result_update(
+                games=achievement_games,
+                fetcher=achievement_fetcher,
+                task_name="Achievements",
+                action_text="Checking achievements for",
+                status_label=self.achievement_status,
+                progress_bar=self.achievement_progress,
+                result_handler=self.handle_achievement_result,
+                finished_status_callback=self.update_achievement_status,
+                thread_attr="combined_achievement_thread",
+                worker_attr="combined_achievement_worker",
             )
 
-        self.combined_update_total = sum(
-            len(stage[0]) for stage in self.combined_update_stages
+    def combined_thread_finished(self):
+        thread = self.sender()
+
+        source_info = self.combined_thread_sources.pop(
+            thread,
+            None,
         )
 
-        self.combined_update_active = True
-        self.combined_stage_offset = 0
-        self.combined_stage_size = 0
-
-        self.update_all_progress.setRange(0, self.combined_update_total)
-        self.update_all_progress.setValue(0)
-        self.update_all_progress.setVisible(True)
-
-        self.update_all_status.setText("Missing Data: Updating...")
-        self.set_update_buttons_enabled(False)
-
-        self.start_next_combined_stage()
-
-    def start_next_combined_stage(self):
-        if not self.combined_update_stages:
-            self.finish_combined_update()
+        if source_info is None:
             return
 
-        (
-            games,
-            updater,
-            task_name,
-            action_text,
-            status_label,
-            progress_bar,
-            status_callback,
-        ) = self.combined_update_stages.pop(0)
+        source_name, thread_attr, worker_attr = source_info
 
-        self.combined_stage_size = len(games)
-        self.combined_stage_status_callback = status_callback
+        setattr(self, worker_attr, None)
+        setattr(self, thread_attr, None)
 
-        self.update_all_status.setText(f"Missing Data: {task_name}")
-
-        self.start_batch_update(
-            games=games,
-            updater=updater,
-            task_name=task_name,
-            action_text=action_text,
-            status_label=status_label,
-            progress_bar=progress_bar,
-            finished_callback=self.finish_combined_stage,
+        callback = self.combined_finished_callbacks.pop(
+            source_name,
+            None,
         )
 
-    def finish_combined_stage(self):
-        self.combined_stage_offset += self.combined_stage_size
+        if callback is not None:
+            callback()
 
-        if self.combined_stage_status_callback is not None:
-            self.combined_stage_status_callback()
+        self.combined_jobs_remaining -= 1
 
-        self.combined_stage_size = 0
-        self.combined_stage_status_callback = None
+        print(f"{source_name} finished. {self.combined_jobs_remaining} jobs remaining.")
 
-        self.start_next_combined_stage()
+        if self.combined_jobs_remaining == 0:
+            self.finish_combined_update()
+
+    def finish_combined_update(self):
+        was_cancelled = self.update_cancel_requested
+
+        self.combined_update_active = False
+
+        if not was_cancelled:
+            self.update_all_progress.setValue(self.combined_update_total)
+
+        self.update_all_progress.setVisible(False)
+
+        self.hltb_progress.setVisible(False)
+        self.metadata_progress.setVisible(False)
+        self.achievement_progress.setVisible(False)
+
+        self.apply_filters()
+
+        self.update_hltb_status()
+        self.update_metadata_status()
+        self.update_achievement_status()
+
+        remaining = sum(1 for game in self.games if not game.hltb_checked)
+
+        remaining += sum(1 for game in self.games if not game.metadata_checked)
+
+        remaining += sum(1 for game in self.games if not game.achievements_checked)
+
+        if was_cancelled:
+            self.update_all_status.setText(
+                f"Missing Data: Cancelled ({remaining} still unchecked)"
+            )
+        elif remaining == 0:
+            self.update_all_status.setText("Missing Data: Complete")
+        else:
+            self.update_all_status.setText(f"Missing Data: {remaining} still unchecked")
+
+        self.combined_hltb_worker = None
+        self.combined_hltb_thread = None
+
+        self.combined_metadata_worker = None
+        self.combined_metadata_thread = None
+
+        self.combined_achievement_worker = None
+        self.combined_achievement_thread = None
+
+        self.combined_update_total = 0
+        self.combined_progress = {}
+        self.combined_jobs_remaining = 0
+
+        self.combined_progress_bars = {}
+        self.combined_finished_callbacks = {}
+        self.combined_thread_sources = {}
+
+        self.update_cancel_requested = False
+        self.set_update_buttons_enabled(True)
 
     def refresh_library(self):
         steam_id = self.get_steam_id()
@@ -970,6 +1229,7 @@ class MainWindow(QMainWindow):
         if self.steam_refresh_thread is not None:
             return
 
+        self.update_cancel_requested = False
         self.set_update_buttons_enabled(False)
         self.library_status.setText("Steam Library: Refreshing...")
         self.library_progress.setVisible(True)
@@ -1044,41 +1304,15 @@ class MainWindow(QMainWindow):
         )
 
     def library_refresh_finished(self):
-        self.set_update_buttons_enabled(True)
         self.library_progress.setVisible(False)
 
-        self.batch_update_thread = None
-        self.batch_update_worker = None
-        self.batch_update_progress = None
-        self.batch_update_finished_callback = None
+        self.steam_refresh_worker = None
+        self.steam_refresh_thread = None
 
-    def finish_combined_update(self):
-        self.combined_update_active = False
+        if self.update_cancel_requested:
+            self.library_status.setText("Steam Library: Refresh cancelled")
 
-        self.update_all_progress.setValue(self.combined_update_total)
-        self.update_all_progress.setVisible(False)
-
-        self.update_hltb_status()
-        self.update_metadata_status()
-        self.update_achievement_status()
-
-        remaining = sum(1 for game in self.games if not game.hltb_checked)
-
-        remaining += sum(1 for game in self.games if not game.metadata_checked)
-
-        remaining += sum(1 for game in self.games if not game.achievements_checked)
-
-        if remaining == 0:
-            self.update_all_status.setText("Missing Data: Complete")
-        else:
-            self.update_all_status.setText(f"Missing Data: {remaining} still unchecked")
-
-        self.combined_update_stages = []
-        self.combined_stage_offset = 0
-        self.combined_stage_size = 0
-        self.combined_update_total = 0
-        self.combined_stage_status_callback = None
-
+        self.update_cancel_requested = False
         self.set_update_buttons_enabled(True)
 
     def first_run_setup(self):
@@ -1232,12 +1466,268 @@ class MainWindow(QMainWindow):
         if hasattr(self, "details_panel"):
             QTimer.singleShot(0, self.update_media_sizes)
 
+    def updates_running(self):
+        threads = [
+            self.steam_refresh_thread,
+            self.batch_update_thread,
+            self.combined_hltb_thread,
+            self.combined_metadata_thread,
+            self.combined_achievement_thread,
+        ]
+
+        return any(thread is not None and thread.isRunning() for thread in threads)
+
+    def cancel_updates(self):
+        workers = [
+            self.steam_refresh_worker,
+            self.batch_update_worker,
+            self.combined_hltb_worker,
+            self.combined_metadata_worker,
+            self.combined_achievement_worker,
+        ]
+
+        active_workers = [worker for worker in workers if worker is not None]
+
+        if not active_workers:
+            return
+
+        self.update_cancel_requested = True
+        self.cancel_updates_button.setEnabled(False)
+
+        if self.combined_update_active:
+            self.update_all_status.setText("Missing Data: Stopping...")
+        elif self.steam_refresh_worker is not None:
+            self.library_status.setText("Steam Library: Stopping...")
+        else:
+            self.update_all_status.setText("Update: Stopping...")
+
+        for worker in active_workers:
+            worker.cancel()
+
+    def closeEvent(self, event):
+        if self.updates_running():
+            if not self.close_after_updates_stop:
+                self.close_after_updates_stop = True
+                self.cancel_updates()
+
+            event.ignore()
+            QTimer.singleShot(
+                100,
+                self.close,
+            )
+            return
+
+        self.stop_trailer()
+        event.accept()
+
     def set_update_buttons_enabled(self, enabled):
         self.update_all_button.setEnabled(enabled)
         self.library_button.setEnabled(enabled)
         self.hltb_button.setEnabled(enabled)
         self.metadata_button.setEnabled(enabled)
         self.achievement_button.setEnabled(enabled)
+
+        review_available = any(
+            game.hltb_match_status == "review" for game in self.games
+        )
+
+        self.hltb_review_button.setEnabled(enabled and review_available)
+
+        self.cancel_updates_button.setEnabled(
+            not enabled and not self.update_cancel_requested
+        )
+
+    def handle_hltb_result(self, game, result):
+        try:
+            apply_hltb(game, result)
+            save_game(game)
+
+        except Exception as error:
+            print(f"Could not apply HLTB result for {game.name}: {error}")
+
+    def handle_metadata_result(self, game, result):
+        try:
+            apply_metadata(game, result)
+            save_game(game)
+
+        except Exception as error:
+            print(f"Could not apply metadata result for {game.name}: {error}")
+
+    def handle_achievement_result(self, game, result):
+        try:
+            apply_achievements(game, result)
+            save_game(game)
+
+        except Exception as error:
+            print(f"Could not apply achievement result for {game.name}: {error}")
+
+    def current_hltb_time(self, game):
+        metric = self.hltb_metric_filter.currentText()
+        return game.hltb_time(metric)
+
+    def review_single_hltb_game(self, game):
+        candidates = load_hltb_candidates(game.app_id)
+
+        if not candidates:
+            return "skip"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Review HLTB Match")
+        dialog.resize(600, 350)
+
+        layout = QVBoxLayout(dialog)
+
+        title_label = QLabel(f"Steam game:\n{game.name}")
+
+        title_label.setWordWrap(True)
+
+        layout.addWidget(title_label)
+
+        candidate_combo = QComboBox()
+
+        for candidate in candidates:
+            similarity = candidate.get("similarity") or 0
+
+            candidate_combo.addItem(f"{candidate['game_name']} ({similarity:.2f})")
+
+        layout.addWidget(candidate_combo)
+
+        details_label = QLabel()
+        details_label.setWordWrap(True)
+
+        layout.addWidget(details_label)
+
+        open_button = QPushButton("Open HLTB Page")
+
+        layout.addWidget(open_button)
+
+        button_row = QHBoxLayout()
+
+        accept_button = QPushButton("Accept Match")
+
+        no_match_button = QPushButton("No Match")
+
+        skip_button = QPushButton("Skip")
+
+        close_button = QPushButton("Close Review")
+
+        button_row.addWidget(accept_button)
+        button_row.addWidget(no_match_button)
+        button_row.addWidget(skip_button)
+        button_row.addWidget(close_button)
+
+        layout.addLayout(button_row)
+
+        result = {"action": "close"}
+
+        def selected_candidate():
+            index = candidate_combo.currentIndex()
+
+            if index < 0:
+                return None
+
+            return candidates[index]
+
+        def format_time(value):
+            if value is None:
+                return "Unknown"
+
+            return f"{value:.1f} h"
+
+        def update_candidate_details():
+            candidate = selected_candidate()
+
+            if candidate is None:
+                details_label.setText("No candidate selected.")
+
+                open_button.setEnabled(False)
+                return
+
+            similarity = candidate.get("similarity") or 0
+
+            details_label.setText(
+                f"HLTB title: "
+                f"{candidate['game_name']}\n\n"
+                f"Similarity: "
+                f"{similarity:.2f}\n\n"
+                f"Main Story: "
+                f"{format_time(candidate.get('main_story'))}\n"
+                f"Main + Extra: "
+                f"{format_time(candidate.get('main_extra'))}\n"
+                f"Completionist: "
+                f"{format_time(candidate.get('completionist'))}\n"
+                f"All Styles: "
+                f"{format_time(candidate.get('all_styles'))}\n\n"
+                f"Search query: "
+                f"{candidate.get('search_query') or 'Unknown'}"
+            )
+
+            open_button.setEnabled(bool(candidate.get("game_web_link")))
+
+        def open_candidate_page():
+            candidate = selected_candidate()
+
+            if candidate is None:
+                return
+
+            url = candidate.get("game_web_link")
+
+            if not url:
+                return
+
+            QDesktopServices.openUrl(QUrl(url))
+
+        def accept_candidate():
+            candidate = selected_candidate()
+
+            if candidate is None:
+                return
+
+            apply_hltb_candidate(
+                game,
+                candidate,
+            )
+
+            save_game(game)
+
+            result["action"] = "accept"
+
+            dialog.accept()
+
+        def mark_no_match():
+            mark_hltb_no_match(game)
+
+            save_game(game)
+
+            result["action"] = "no_match"
+
+            dialog.accept()
+
+        def skip_game():
+            result["action"] = "skip"
+            dialog.accept()
+
+        def close_review():
+            result["action"] = "close"
+            dialog.reject()
+
+        candidate_combo.currentIndexChanged.connect(update_candidate_details)
+
+        open_button.clicked.connect(open_candidate_page)
+
+        accept_button.clicked.connect(accept_candidate)
+
+        no_match_button.clicked.connect(mark_no_match)
+
+        skip_button.clicked.connect(skip_game)
+
+        close_button.clicked.connect(close_review)
+
+        update_candidate_details()
+
+        dialog.exec()
+
+        return result["action"]
 
 
 def run_gui(games, steam_api_key):

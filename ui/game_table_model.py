@@ -2,6 +2,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+
 class GameTableModel(QAbstractTableModel):
     HEADERS = [
         "Game",
@@ -10,12 +11,14 @@ class GameTableModel(QAbstractTableModel):
         "Last Played",
         "Recent",
         "HLTB Time",
-        "Achievements"
+        "Achievements",
     ]
 
     def __init__(self, games=None, parent=None):
         super().__init__(parent)
+
         self.games = games or []
+        self.hltb_metric = "Main Story"
 
     def rowCount(self, parent=QModelIndex()):
         return len(self.games)
@@ -63,7 +66,7 @@ class GameTableModel(QAbstractTableModel):
             return f"{recent_minutes} min"
 
         if column == 5:
-            hltb_time = game.preferred_hltb_time()
+            hltb_time = game.hltb_time(self.hltb_metric)
 
             if hltb_time is None:
                 return "Unknown"
@@ -86,6 +89,9 @@ class GameTableModel(QAbstractTableModel):
             return None
 
         if orientation == Qt.Orientation.Horizontal:
+            if section == 5:
+                return f"HLTB ({self.hltb_metric})"
+
             return self.HEADERS[section]
 
         return section + 1
@@ -100,3 +106,21 @@ class GameTableModel(QAbstractTableModel):
             return self.games[row]
 
         return None
+
+    def set_hltb_metric(self, metric):
+        if self.hltb_metric == metric:
+            return
+
+        self.hltb_metric = metric
+
+        self.headerDataChanged.emit(
+            Qt.Orientation.Horizontal,
+            5,
+            5,
+        )
+
+        if self.games:
+            self.dataChanged.emit(
+                self.index(0, 5),
+                self.index(len(self.games) - 1, 5),
+            )

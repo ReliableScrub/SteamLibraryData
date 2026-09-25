@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+
 @dataclass
 class Game:
     app_id: int
@@ -8,7 +9,7 @@ class Game:
 
     playtime_2weeks_minutes: int = 0
     last_played_timestamp: int = 0
-    
+
     genres: list[str] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
 
@@ -21,26 +22,43 @@ class Game:
 
     hltb_match_name: str | None = None
     hltb_similarity: float | None = None
+
+    hltb_game_id: int | None = None
+    hltb_web_link: str | None = None
+    hltb_match_status: str | None = None
+
     hltb_checked: bool = False
 
     achievement_total: int | None = None
     achievements_unlocked: int | None = None
     achievements_checked: bool = False
-    
+
     manual_status: str | None = None
 
-    def preferred_hltb_time(self):
-        if self.hltb_completionist:
-            return self.hltb_completionist
+    def hltb_time(self, metric):
+        if metric == "Main Story":
+            return self.hltb_main
 
-        if self.hltb_all_styles:
-            return self.hltb_all_styles
-
-        if self.hltb_main_extra:
+        if metric == "Main + Extra":
             return self.hltb_main_extra
 
-        if self.hltb_main:
-            return self.hltb_main
+        if metric == "Completionist":
+            return self.hltb_completionist
+
+        if metric == "All Styles":
+            return self.hltb_all_styles
+
+        return None
+
+    def preferred_hltb_time(self):
+        for value in (
+            self.hltb_completionist,
+            self.hltb_all_styles,
+            self.hltb_main_extra,
+            self.hltb_main,
+        ):
+            if value is not None:
+                return value
 
         return None
 
