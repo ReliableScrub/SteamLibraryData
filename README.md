@@ -43,6 +43,17 @@ The library table was also reworked after large-library testing exposed a perfor
 
 [Read the Phase 2.5 progress notes](progress/02.5-Status-Activity-and-Media/README.MD)
 
+### Phase 3 - External Data Infrastructure
+
+Phase 3 - External Data Infrastructure and Reliability
+
+The third phase focused on making the project's external-data systems reliable enough to handle a large Steam library without blocking the interface or silently storing bad results.
+
+Background update workers were expanded with progress reporting, cancellation, safer persistence, and better failure handling. HowLongToBeat matching was substantially improved with conservative title matching, manual review for ambiguous results, Steam App ID verification, result caching, and a persistent search client that avoids repeating expensive connection and authentication setup.
+
+This phase also added official Steam app classification and reorganized the growing GUI into separate library, updates, settings, controller, and table-model components.
+
+[Read the Phase 3 progress notes](progress/03-External-Data-Infrastructure/README.MD)
 
 ## Technology
 - **Python**
