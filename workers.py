@@ -40,7 +40,7 @@ class SteamLibraryRefreshWorker(QObject):
             if not self._cancel_requested.is_set():
                 self.succeeded.emit(games)
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             if not self._cancel_requested.is_set():
                 self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -112,7 +112,7 @@ class SteamClassificationWorker(QObject):
             # not an update failure.
             pass
 
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             if not self._cancel_requested.is_set():
                 self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -164,7 +164,7 @@ class BatchUpdateWorker(QObject):
                     self.updater(game)
                     save_game(game)
 
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001
                     self.item_failed.emit(
                         f"{self.task_name} failed for "
                         f"{game.name}: "
@@ -233,7 +233,7 @@ class ResultBatchWorker(QObject):
                         result,
                     )
 
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001
                     self.item_failed.emit(
                         f"{self.task_name} failed for "
                         f"{game.name}: "
@@ -347,7 +347,7 @@ class ConcurrentResultWorker(QObject):
                                 result,
                             )
 
-                        except Exception as error:
+                        except Exception as error:  # noqa: BLE001
                             self.item_failed.emit(
                                 f"{self.task_name} failed for "
                                 f"{game.name}: "

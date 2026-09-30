@@ -8,7 +8,7 @@ from storage.database import (
 
 
 def fetch_hltb(game):
-    return get_hltb_data(game.name)
+    return get_hltb_data(game.name, game.app_id)
 
 
 def clear_hltb_match(game):
