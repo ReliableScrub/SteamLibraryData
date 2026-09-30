@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import ClassVar
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, Qt
 
 
 class GameTableModel(QAbstractTableModel):
-    HEADERS = [
+    HEADERS: ClassVar[tuple[str, ...]] = (
         "Game",
         "Status",
         "Steam Playtime",
@@ -12,7 +13,8 @@ class GameTableModel(QAbstractTableModel):
         "Recent",
         "HLTB Time",
         "Achievements",
-    ]
+        "Steam Type",
+    )
 
     def __init__(self, games=None, parent=None):
         super().__init__(parent)
@@ -20,10 +22,10 @@ class GameTableModel(QAbstractTableModel):
         self.games = games or []
         self.hltb_metric = "Main Story"
 
-    def rowCount(self, parent=QModelIndex()):
+    def rowCount(self, parent=None):
         return len(self.games)
 
-    def columnCount(self, parent=QModelIndex()):
+    def columnCount(self, parent=None):
         return len(self.HEADERS)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
@@ -50,7 +52,14 @@ class GameTableModel(QAbstractTableModel):
             timestamp = game.last_played_timestamp or 0
 
             if timestamp > 0:
-                return datetime.fromtimestamp(timestamp).strftime("%b %d, %Y")
+                return (
+                    datetime.fromtimestamp(
+                        timestamp,
+                        tz=timezone.utc,
+                    )
+                    .astimezone()
+                    .strftime("%b %d, %Y")
+                )
 
             return "Never"
 
@@ -81,6 +90,21 @@ class GameTableModel(QAbstractTableModel):
                 return "None"
 
             return f"{game.achievements_unlocked}/{game.achievement_total}"
+
+        if column == 7:
+            if game.classification_updated_at is None:
+                return "Not Checked"
+
+            steam_type_names = {
+                "game": "Game",
+                "software": "Software",
+                "dlc": "DLC",
+                "video": "Video",
+                "hardware": "Hardware",
+                "unknown": "Unknown",
+            }
+
+            return steam_type_names.get(game.steam_type, "Unknown")
 
         return None
 

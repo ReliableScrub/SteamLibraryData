@@ -15,7 +15,7 @@ Originally it was going to be a small data collection script between Steam and H
 
 ## Project Progress
 
-### Phase 1 — Data Collection and First GUI
+### Phase 1 - Data Collection and First GUI
 
 The first phase focused on getting the different data sources working together and building the first usable desktop interface.
 
@@ -23,7 +23,7 @@ This included Steam, SteamSpy, HowLongToBeat, achievements, persistence, and fil
 
 [Read the Phase 1 progress notes](progress/01-Assembling-the-GUI/README.MD)
 
-### Phase 2 — Expansion
+### Phase 2 - Expansion
 
 The second phase focuses on tuning the GUI for future expansion.
 

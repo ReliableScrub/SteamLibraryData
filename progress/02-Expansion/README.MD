@@ -1,4 +1,4 @@
-# Phase 2 — Clean up and Expansion - Current
+# Phase 2 - Clean up and Expansion - Current
 
 So, Phase 2 was all about changing from JSON to SQLite and reorganizing the GUI.
 

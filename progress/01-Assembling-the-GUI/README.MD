@@ -1,4 +1,4 @@
-# Phase 1 — Data Collection and First GUI
+# Phase 1 - Data Collection and First GUI
 
 So my steam library is massive. The original goal was much smaller: read my Steam library, attach HowLongToBeat estimates to the games, and eventually use that information to help decide what to play.
 

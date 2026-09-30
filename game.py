@@ -10,6 +10,9 @@ class Game:
     playtime_2weeks_minutes: int = 0
     last_played_timestamp: int = 0
 
+    steam_type: str = "unknown"
+    classification_updated_at: int | None = None
+
     genres: list[str] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
 
@@ -105,3 +108,11 @@ class Game:
             return "Backlog"
 
         return "Inactive"
+
+    def is_backlog_eligible(self):
+        return self.steam_type not in {
+            "software",
+            "dlc",
+            "video",
+            "hardware",
+        }

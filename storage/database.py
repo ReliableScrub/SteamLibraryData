@@ -1,4 +1,6 @@
 import sqlite3
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from game import Game
@@ -8,13 +10,18 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_FILE = PROJECT_ROOT / "data" / "steam_backlog.db"
 
 
+@contextmanager
 def get_connection():
     DB_FILE.parent.mkdir(exist_ok=True)
 
     connection = sqlite3.connect(DB_FILE)
     connection.execute("PRAGMA foreign_keys = ON")
 
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def initialize_database():
@@ -33,6 +40,9 @@ def initialize_database():
                 playtime_minutes INTEGER NOT NULL DEFAULT 0,
                 playtime_2weeks_minutes INTEGER NOT NULL DEFAULT 0,
                 last_played_timestamp INTEGER NOT NULL DEFAULT 0,
+
+                steam_type TEXT NOT NULL DEFAULT 'unknown',
+                classification_updated_at INTEGER,
 
                 metadata_checked INTEGER NOT NULL DEFAULT 0,
 
@@ -120,8 +130,8 @@ def initialize_database():
             );
         """)
 
-        reset_empty_hltb_checks()
         ensure_game_columns(connection)
+        reset_empty_hltb_checks()
 
 
 def save_game(game):
@@ -135,6 +145,8 @@ def save_game(game):
                 playtime_minutes,
                 playtime_2weeks_minutes,
                 last_played_timestamp,
+                steam_type,
+                classification_updated_at,
                 metadata_checked,
                 hltb_main,
                 hltb_main_extra,
@@ -151,12 +163,14 @@ def save_game(game):
                 achievements_checked,
                 manual_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(app_id) DO UPDATE SET
                 name = excluded.name,
                 playtime_minutes = excluded.playtime_minutes,
                 playtime_2weeks_minutes = excluded.playtime_2weeks_minutes,
                 last_played_timestamp = excluded.last_played_timestamp,
+                steam_type = excluded.steam_type,
+                classification_updated_at = excluded.classification_updated_at,
                 metadata_checked = excluded.metadata_checked,
                 hltb_main = excluded.hltb_main,
                 hltb_main_extra = excluded.hltb_main_extra,
@@ -179,6 +193,8 @@ def save_game(game):
                 game.playtime_minutes,
                 game.playtime_2weeks_minutes,
                 game.last_played_timestamp,
+                game.steam_type,
+                game.classification_updated_at,
                 int(game.metadata_checked),
                 game.hltb_main,
                 game.hltb_main_extra,
@@ -228,6 +244,58 @@ def save_game(game):
             )
 
 
+def save_steam_classifications(classifications):
+    if not classifications:
+        return None
+
+    valid_types = {
+        "game",
+        "software",
+        "dlc",
+        "video",
+        "hardware",
+        "unknown",
+    }
+
+    for app_id, steam_type in classifications.items():
+        if not isinstance(app_id, int) or app_id <= 0:
+            raise ValueError(
+                f"Invalid Steam App ID in classification results: {app_id!r}"
+            )
+
+        if steam_type not in valid_types:
+            raise ValueError(
+                f"Invalid Steam classification for AppID {app_id}: {steam_type!r}"
+            )
+
+    updated_at = int(time.time())
+
+    with get_connection() as connection:
+        for app_id, steam_type in classifications.items():
+            cursor = connection.execute(
+                """
+                UPDATE games
+                SET
+                    steam_type = ?,
+                    classification_updated_at = ?
+                WHERE app_id = ?
+                """,
+                (
+                    steam_type,
+                    updated_at,
+                    app_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"Could not save Steam classification "
+                    f"for AppID {app_id}: game not found."
+                )
+
+    return updated_at
+
+
 def load_games():
     with get_connection() as connection:
         rows = connection.execute("""
@@ -237,6 +305,8 @@ def load_games():
                 playtime_minutes,
                 playtime_2weeks_minutes,
                 last_played_timestamp,
+                steam_type,
+                classification_updated_at,
                 metadata_checked,
                 hltb_main,
                 hltb_main_extra,
@@ -289,23 +359,25 @@ def load_games():
                 playtime_minutes=row[2],
                 playtime_2weeks_minutes=row[3],
                 last_played_timestamp=row[4],
-                metadata_checked=bool(row[5]),
-                hltb_main=row[6],
-                hltb_main_extra=row[7],
-                hltb_completionist=row[8],
-                hltb_all_styles=row[9],
-                hltb_match_name=row[10],
-                hltb_similarity=row[11],
-                hltb_game_id=row[12],
-                hltb_web_link=row[13],
-                hltb_match_status=row[14],
-                hltb_checked=bool(row[15]),
-                achievement_total=row[16],
-                achievements_unlocked=row[17],
-                achievements_checked=bool(row[18]),
+                steam_type=row[5],
+                classification_updated_at=row[6],
+                metadata_checked=bool(row[7]),
+                hltb_main=row[8],
+                hltb_main_extra=row[9],
+                hltb_completionist=row[10],
+                hltb_all_styles=row[11],
+                hltb_match_name=row[12],
+                hltb_similarity=row[13],
+                hltb_game_id=row[14],
+                hltb_web_link=row[15],
+                hltb_match_status=row[16],
+                hltb_checked=bool(row[17]),
+                achievement_total=row[18],
+                achievements_unlocked=row[19],
+                achievements_checked=bool(row[20]),
                 genres=genres,
                 tags=tags,
-                manual_status=row[19],
+                manual_status=row[21],
             )
 
             games.append(game)
@@ -393,6 +465,14 @@ def ensure_game_columns(conn):
     if "hltb_match_status" not in columns:
         conn.execute("ALTER TABLE games ADD COLUMN hltb_match_status TEXT")
 
+    if "steam_type" not in columns:
+        conn.execute(
+            "ALTER TABLE games ADD COLUMN steam_type TEXT NOT NULL DEFAULT 'unknown'"
+        )
+
+    if "classification_updated_at" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN classification_updated_at INTEGER")
+
 
 def reset_empty_hltb_checks():
     with get_connection() as connection:
@@ -401,6 +481,7 @@ def reset_empty_hltb_checks():
             UPDATE games
             SET hltb_checked = 0
             WHERE hltb_checked = 1
+              AND hltb_match_status IS NULL
               AND hltb_match_name IS NULL
               AND hltb_main IS NULL
               AND hltb_main_extra IS NULL

@@ -1,4 +1,4 @@
-# Steam Backlog DB Project — Progress Report
+# Steam Backlog DB Project - Progress Report
 
 ## Current Phase
 
@@ -255,15 +255,69 @@ Current behavior:
 - real no-result entries can become `no_match`
 - accepted mappings persist with HLTB ID/page information
 
-## Next
+## Steam Classification
 
-After the current HLTB run:
+Official Steam app classification was added using Valve's `IStoreService/GetAppList/v1/`.
 
-1. audit `matched`, `review`, and `no_match`
-2. fix only broadly useful remaining title rules
-3. improve GUI visibility for failed updater items
-4. move trailer lookup off the GUI thread
-5. move uncached artwork downloads off the GUI thread
-6. finish custom HLTB min/max filtering
-7. clean temporary debug logging
-8. continue toward backlog scoring/recommendations
+Owned entries can now be classified as:
+
+- `game`
+- `software`
+- `dlc`
+- `video`
+- `hardware`
+- `unknown`
+
+`unknown` does not automatically mean non-game. Delisted, legacy, beta, and unusual App IDs may simply be absent from Steam's current catalog.
+
+Classification data is stored through:
+
+- `steam_type`
+- `classification_updated_at`
+
+A manual `Refresh Steam Classification` action was added to the Data Updates tab.
+
+The Library table now displays and can sort by Steam Type.
+
+A full-library test of roughly 3,800 entries classified most entries as games while also correctly identifying software such as Blender and RPG Maker MV.
+
+## Classification Reliability
+
+Classification runs in the background and supports cancellation.
+
+Results are only persisted after a complete successful scan, so cancelled or failed runs do not overwrite existing valid classifications.
+
+Steam library refresh also preserves previously collected classification, HLTB, metadata, and achievement data.
+
+## GUI Refactor
+
+`gui.py` had grown too large, so the GUI was reorganized by responsibility.
+
+Current UI structure:
+
+```text
+ui/
+├── gui.py
+├── library_tab.py
+├── updates_tab.py
+├── settings_tab.py
+├── update_controller.py
+└── game_table_model.py
+```
+
+Responsibilities are now divided roughly as follows:
+
+- `gui.py` - top-level coordination and application lifecycle
+- `library_tab.py` - filters, table, details, manual status, artwork, trailers, and HLTB review
+- `updates_tab.py` - update controls and progress display
+- `settings_tab.py` - account/cache/database controls
+- `update_controller.py` - background workers, update orchestration, progress, cancellation, and persistence
+
+The underlying Steam, HLTB, SteamSpy, and achievement behavior was largely preserved; the refactor primarily moved existing logic into more appropriate components.
+
+## Additional Cleanup
+
+The table model now includes a Steam Type column and Steam Type sorting.
+
+Several static-analysis issues were also cleaned up, including timezone-aware timestamp conversion and table-model type/default warnings.
+

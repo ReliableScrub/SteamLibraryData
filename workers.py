@@ -3,7 +3,11 @@ from threading import Event
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from api.steam_api import get_owned_games
+from api.steam_api import (
+    SteamClassificationCancelled,
+    classify_owned_apps,
+    get_owned_games,
+)
 from storage.database import save_game
 
 
@@ -35,6 +39,78 @@ class SteamLibraryRefreshWorker(QObject):
 
             if not self._cancel_requested.is_set():
                 self.succeeded.emit(games)
+
+        except Exception as error:
+            if not self._cancel_requested.is_set():
+                self.failed.emit(f"{type(error).__name__}: {error}")
+
+        finally:
+            self.finished.emit()
+
+
+class SteamClassificationWorker(QObject):
+    status_changed = Signal(str)
+
+    # app_type, page_number, owned_matches
+    progress_changed = Signal(str, int, int)
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+    def __init__(
+        self,
+        owned_app_ids,
+        steam_api_key,
+    ):
+        super().__init__()
+
+        self.owned_app_ids = set(owned_app_ids)
+        self.steam_api_key = steam_api_key
+        self._cancel_requested = Event()
+
+    def cancel(self):
+        self._cancel_requested.set()
+
+    def _report_progress(
+        self,
+        app_type,
+        page_number,
+        owned_matches,
+    ):
+        self.status_changed.emit(
+            f"Steam Classification: "
+            f"Scanning {app_type} "
+            f"(page {page_number}, "
+            f"{owned_matches} owned matches)..."
+        )
+
+        self.progress_changed.emit(
+            app_type,
+            page_number,
+            owned_matches,
+        )
+
+    @Slot()
+    def run(self):
+        try:
+            if self._cancel_requested.is_set():
+                return
+
+            classifications = classify_owned_apps(
+                owned_app_ids=self.owned_app_ids,
+                steam_api_key=self.steam_api_key,
+                cancel_requested=self._cancel_requested.is_set,
+                progress_callback=self._report_progress,
+            )
+
+            if not self._cancel_requested.is_set():
+                self.succeeded.emit(classifications)
+
+        except SteamClassificationCancelled:
+            # Cancellation is an expected control path,
+            # not an update failure.
+            pass
 
         except Exception as error:
             if not self._cancel_requested.is_set():
