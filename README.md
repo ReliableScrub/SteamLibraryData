@@ -13,6 +13,37 @@ Originally it was going to be a small data collection script between Steam and H
 - Pick a random game from the currently filtered library
 - Bind a local database to one Steam account to avoid accidentally mixing libraries
 
+## Steam Web API Setup
+
+SteamLibraryData uses the official Steam Web API to import your owned games and retrieve account-specific Steam data.
+
+Because Steam Web API keys are tied to individual Steam accounts, **this does not include or distribute an API key**. You must provide your own key.
+
+### Requirements
+
+You will need:
+
+- your SteamID64
+- your personal Steam Web API key
+- a Steam account with the required profile/library visibility for the data you want to retrieve
+
+### Configuration
+
+For development, create a `.env` file in the project root:
+
+```env
+STEAM_ID=YOUR_STEAMID64
+STEAM_API_KEY=YOUR_STEAM_WEB_API_KEY
+```
+
+Do not commit this file to Git.
+
+Your API key should be treated as a private credential. Never post it publicly or include it in screenshots, bug reports, or repository files.
+
+Future packaged versions of SteamLibraryData may provide an in-app setup screen instead of requiring manual `.env` configuration.
+
+
+
 ## Project Progress
 
 ### Phase 1 - Data Collection and First GUI
