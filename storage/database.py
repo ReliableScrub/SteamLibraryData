@@ -4,16 +4,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from game import Game
-
-# SteamLibraryData/data/steam_backlog.db
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_FILE = PROJECT_ROOT / "data" / "steam_backlog.db"
+from storage.paths import DB_FILE
 
 
 @contextmanager
 def get_connection():
-    DB_FILE.parent.mkdir(exist_ok=True)
-
     connection = sqlite3.connect(DB_FILE)
     connection.execute("PRAGMA foreign_keys = ON")
 
