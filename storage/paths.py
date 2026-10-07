@@ -34,4 +34,5 @@ def get_app_data_directory():
 APP_DATA_DIRECTORY = get_app_data_directory()
 
 DB_FILE = APP_DATA_DIRECTORY / "steam_backlog.db"
+SETTINGS_FILE = APP_DATA_DIRECTORY / "settings.json"
 IMAGE_CACHE = APP_DATA_DIRECTORY / "images"
