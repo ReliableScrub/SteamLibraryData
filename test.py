@@ -1,5 +1,3 @@
-from storage.paths import APP_DATA_DIRECTORY, DB_FILE, IMAGE_CACHE
+from storage.credentials import delete_steam_api_key
 
-print(APP_DATA_DIRECTORY)
-print(DB_FILE)
-print(IMAGE_CACHE)
+delete_steam_api_key()

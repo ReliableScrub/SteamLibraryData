@@ -18,6 +18,15 @@ STORE_APP_TYPE_FLAGS = {
 STORE_PAGE_SIZE = 50_000
 STORE_REQUEST_TIMEOUT = 30
 STORE_MAX_ATTEMPTS = 3
+STEAM_API_VALIDATION_TIMEOUT = 10
+
+
+class SteamApiKeyRejected(Exception):
+    pass
+
+
+class SteamApiValidationError(Exception):
+    pass
 
 
 class SteamClassificationCancelled(Exception):
@@ -31,14 +40,22 @@ def get_game_image_url(app_id):
 def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
     url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
 
+    headers = {
+        "x-webapi-key": steam_api_key,
+    }
+
     params = {
-        "key": steam_api_key,
         "steamid": steam_id,
         "include_appinfo": True,
         "include_played_free_games": True,
     }
 
-    response = requests.get(url, params=params, timeout=30)
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=30,
+    )
 
     # Check if the request was successful
     response.raise_for_status()
@@ -91,8 +108,11 @@ def _get_store_app_list_page(
 
     request_data[STORE_APP_TYPE_FLAGS[app_type]] = True
 
+    headers = {
+        "x-webapi-key": steam_api_key,
+    }
+
     params = {
-        "key": steam_api_key,
         "input_json": json.dumps(request_data),
     }
 
@@ -102,6 +122,7 @@ def _get_store_app_list_page(
         try:
             response = session.get(
                 STORE_APP_LIST_URL,
+                headers=headers,
                 params=params,
                 timeout=STORE_REQUEST_TIMEOUT,
             )
@@ -282,3 +303,68 @@ def classify_owned_apps(
             )
 
     return classifications
+
+
+def validate_steam_api_key(steam_api_key):
+    steam_api_key = str(steam_api_key).strip()
+
+    if not steam_api_key:
+        raise SteamApiKeyRejected("Steam API key cannot be empty.")
+
+    request_data = {
+        "include_games": True,
+        "include_dlc": False,
+        "include_software": False,
+        "include_videos": False,
+        "include_hardware": False,
+        "last_appid": 0,
+        "max_results": 1,
+    }
+
+    try:
+        response = requests.get(
+            STORE_APP_LIST_URL,
+            headers={
+                "x-webapi-key": steam_api_key,
+            },
+            params={
+                "input_json": json.dumps(request_data),
+            },
+            timeout=STEAM_API_VALIDATION_TIMEOUT,
+        )
+    except requests.RequestException as error:
+        raise SteamApiValidationError(
+            "Steam could not be reached, so the API key could not be verified."
+        ) from error
+
+    if response.status_code in (401, 403):
+        raise SteamApiKeyRejected(
+            "Steam rejected this API key. Check that it was copied correctly "
+            "and that it is a standard Steam Web API key."
+        )
+
+    if response.status_code == 429:
+        raise SteamApiValidationError(
+            "Steam temporarily rate-limited the validation request."
+        )
+
+    try:
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise SteamApiValidationError(
+            f"Steam returned HTTP {response.status_code} while validating the API key."
+        ) from error
+
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise SteamApiValidationError(
+            "Steam returned an unexpected response while validating the API key."
+        ) from error
+
+    if not isinstance(data.get("response"), dict):
+        raise SteamApiValidationError(
+            "Steam returned an unexpected response while validating the API key."
+        )
+
+    return True

@@ -1,4 +1,3 @@
-import os
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -13,20 +12,13 @@ if hasattr(sys.stderr, "reconfigure"):
         errors="replace",
     )
 
-from dotenv import load_dotenv
-
+from storage.credentials import get_steam_api_key
 from storage.database import initialize_database, load_games
 from ui.gui import run_gui
 
 
 def main():
-    load_dotenv()
-
-    steam_api_key = os.getenv("STEAM_API_KEY")
-
-    if not steam_api_key:
-        print("STEAM_API_KEY is missing.")
-        return
+    steam_api_key = get_steam_api_key()
 
     initialize_database()
 
