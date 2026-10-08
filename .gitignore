@@ -188,3 +188,4 @@ data/
 migrate_json_to_sqlite.py
 /reminders
 /tests
+.env.old

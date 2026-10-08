@@ -4,11 +4,19 @@ from threading import Event
 from PySide6.QtCore import QObject, Signal, Slot
 
 from api.steam_api import (
+    SteamApiError,
     SteamClassificationCancelled,
     classify_owned_apps,
     get_owned_games,
 )
 from storage.database import save_game
+
+
+def _format_worker_error(error):
+    if isinstance(error, SteamApiError):
+        return str(error)
+
+    return f"{type(error).__name__}: {error}"
 
 
 class SteamLibraryRefreshWorker(QObject):
@@ -40,9 +48,17 @@ class SteamLibraryRefreshWorker(QObject):
             if not self._cancel_requested.is_set():
                 self.succeeded.emit(games)
 
+        except SteamApiError as error:
+            if not self._cancel_requested.is_set():
+                self.failed.emit(str(error))
+
         except Exception as error:  # noqa: BLE001
             if not self._cancel_requested.is_set():
-                self.failed.emit(f"{type(error).__name__}: {error}")
+                self.failed.emit(
+                    "An unexpected error occurred while refreshing the "
+                    "Steam library. "
+                    f"{type(error).__name__}: {error}"
+                )
 
         finally:
             self.finished.emit()
@@ -112,9 +128,16 @@ class SteamClassificationWorker(QObject):
             # not an update failure.
             pass
 
+        except SteamApiError as error:
+            if not self._cancel_requested.is_set():
+                self.failed.emit(str(error))
+
         except Exception as error:  # noqa: BLE001
             if not self._cancel_requested.is_set():
-                self.failed.emit(f"{type(error).__name__}: {error}")
+                self.failed.emit(
+                    "An unexpected error occurred during Steam classification. "
+                    f"{type(error).__name__}: {error}"
+                )
 
         finally:
             self.finished.emit()
@@ -168,7 +191,7 @@ class BatchUpdateWorker(QObject):
                     self.item_failed.emit(
                         f"{self.task_name} failed for "
                         f"{game.name}: "
-                        f"{type(error).__name__}: {error}"
+                        f"{_format_worker_error(error)}"
                     )
 
                 self.progress_changed.emit(

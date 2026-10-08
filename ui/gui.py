@@ -171,7 +171,12 @@ class MainWindow(QMainWindow):
         if saved_steam_id is None:
             saved_steam_id = get_database_steam_id()
 
-        self.settings_tab = SettingsTab(saved_steam_id, self)
+        self.settings_tab = SettingsTab(
+            saved_steam_id,
+            bool(self.steam_api_key),
+            self,
+        )
+
         self.contact_tab = self._create_contact_tab()
 
         self.tabs.addTab(self.library_tab, "Library")
@@ -201,6 +206,9 @@ class MainWindow(QMainWindow):
         )
 
         self.updates_tab.cancel_updates_button.clicked.connect(self.cancel_updates)
+
+        self.settings_tab.change_steam_id_button.clicked.connect(self.change_steam_id)
+        self.settings_tab.change_api_key_button.clicked.connect(self.change_api_key)
         self.settings_tab.clear_images_button.clicked.connect(self.clear_cached_images)
         self.settings_tab.reset_database_button.clicked.connect(self.reset_database)
 
@@ -219,6 +227,9 @@ class MainWindow(QMainWindow):
 
     def _update_busy_state(self, busy):
         self.updates_tab.set_busy(busy)
+
+        self.settings_tab.change_steam_id_button.setEnabled(not busy)
+        self.settings_tab.change_api_key_button.setEnabled(not busy)
         self.settings_tab.reset_database_button.setEnabled(not busy)
 
     def _games_changed(self, games):
@@ -358,9 +369,113 @@ class MainWindow(QMainWindow):
 
         self.steam_id = steam_id
 
-        self.settings_tab.account_label.setText(f"Steam account: {steam_id}")
+        self.settings_tab.set_steam_id(steam_id)
 
         return self.steam_id
+
+    def change_steam_id(self):
+        current_steam_id = get_saved_steam_id()
+
+        steam_id, accepted = QInputDialog.getText(
+            self,
+            "Change SteamID64",
+            "Enter the SteamID64 you want to use:",
+            text=current_steam_id or "",
+        )
+
+        if not accepted:
+            return
+
+        steam_id = steam_id.strip()
+
+        if not steam_id.isdigit():
+            QMessageBox.warning(
+                self,
+                "Invalid Steam ID",
+                "SteamID64 must contain only numbers.",
+            )
+            return
+
+        if steam_id == current_steam_id:
+            QMessageBox.information(
+                self,
+                "Steam Account",
+                "That SteamID64 is already configured.",
+            )
+            return
+
+        database_steam_id = get_database_steam_id()
+
+        if database_steam_id is not None and database_steam_id != steam_id:
+            result = QMessageBox.question(
+                self,
+                "Switch Steam Account",
+                "The current local database belongs to a different Steam "
+                "account.\n\n"
+                "Switching accounts requires deleting the current local "
+                "database so library data from the two accounts is not mixed.\n\n"
+                "Your image cache will be kept.\n\n"
+                "Switch accounts and reset the local database?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
+            delete_database()
+            save_steam_id(steam_id)
+
+            QMessageBox.information(
+                self,
+                "Steam Account Changed",
+                "The SteamID64 has been changed and the old account's local "
+                "database has been removed.\n\n"
+                "The application will now close. On the next launch you can "
+                "import the new Steam library.",
+            )
+
+            QApplication.quit()
+            return
+
+        try:
+            set_database_steam_id(steam_id)
+            save_steam_id(steam_id)
+        except ValueError as error:
+            QMessageBox.warning(
+                self,
+                "Steam Account",
+                str(error),
+            )
+            return
+
+        self.steam_id = steam_id
+        self.settings_tab.set_steam_id(steam_id)
+
+        QMessageBox.information(
+            self,
+            "Steam Account",
+            "SteamID64 updated.",
+        )
+
+    def change_api_key(self):
+        new_api_key = prompt_for_steam_api_key()
+
+        if new_api_key is None:
+            return
+
+        self.steam_api_key = new_api_key
+        self.settings_tab.set_api_key_configured(True)
+
+        QMessageBox.information(
+            self,
+            "Steam Web API Key Changed",
+            "The new Steam Web API key has been saved securely.\n\n"
+            "The application will now close so all Steam services use the "
+            "new key when it is reopened.",
+        )
+
+        QApplication.quit()
 
     def clear_cached_images(self):
         clear_image_cache()

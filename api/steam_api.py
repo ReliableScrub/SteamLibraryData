@@ -33,16 +33,92 @@ class SteamClassificationCancelled(Exception):
     pass
 
 
+class SteamApiError(RuntimeError):
+    pass
+
+
+class SteamRateLimitError(SteamApiError):
+    pass
+
+
+class SteamUnavailableError(SteamApiError):
+    pass
+
+
+class SteamResponseError(SteamApiError):
+    pass
+
+
 def get_game_image_url(app_id):
     return f"https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/{app_id}/header.jpg"
 
 
+def _get_steam_json(
+    url,
+    steam_api_key,
+    *,
+    params=None,
+    timeout=30,
+    session=None,
+):
+    requester = session if session is not None else requests
+
+    try:
+        response = requester.get(
+            url,
+            headers={
+                "x-webapi-key": steam_api_key,
+            },
+            params=params,
+            timeout=timeout,
+        )
+
+    except requests.Timeout as error:
+        raise SteamUnavailableError(
+            "Steam did not respond in time. Try again later."
+        ) from error
+
+    except requests.ConnectionError as error:
+        raise SteamUnavailableError(
+            "Could not connect to Steam. Check your internet connection."
+        ) from error
+
+    except requests.RequestException as error:
+        raise SteamApiError("The Steam request could not be completed.") from error
+
+    if response.status_code in (401, 403):
+        raise SteamApiKeyRejected(
+            "Steam rejected your Web API key. Update it from the Settings tab."
+        )
+
+    if response.status_code == 429:
+        raise SteamRateLimitError(
+            "Steam is temporarily rate-limiting requests. Try again later."
+        )
+
+    if 500 <= response.status_code < 600:
+        raise SteamUnavailableError(
+            "Steam's Web API is currently unavailable. Try again later."
+        )
+
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as error:
+        raise SteamApiError(f"Steam returned HTTP {response.status_code}.") from error
+
+    try:
+        data = response.json()
+    except ValueError as error:
+        raise SteamResponseError("Steam returned an unexpected response.") from error
+
+    if not isinstance(data, dict):
+        raise SteamResponseError("Steam returned an unexpected response.")
+
+    return data
+
+
 def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
     url = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
-
-    headers = {
-        "x-webapi-key": steam_api_key,
-    }
 
     params = {
         "steamid": steam_id,
@@ -50,27 +126,38 @@ def get_owned_games(steam_id: str, steam_api_key: str) -> list[Game]:
         "include_played_free_games": True,
     }
 
-    response = requests.get(
+    data = _get_steam_json(
         url,
-        headers=headers,
+        steam_api_key,
         params=params,
         timeout=30,
     )
 
-    # Check if the request was successful
-    response.raise_for_status()
+    response_data = data.get("response")
 
-    data = response.json()
+    if not isinstance(response_data, dict):
+        raise SteamResponseError("Steam returned an unexpected library response.")
 
-    # Check if the response contains the expected data
-    games = data.get("response", {}).get("games", [])
+    games = response_data.get("games", [])
+
+    if not isinstance(games, list):
+        raise SteamResponseError("Steam returned an unexpected owned-games list.")
 
     game_list = []
 
     for game_data in games:
+        if not isinstance(game_data, dict):
+            continue
+
+        app_id = game_data.get("appid")
+        name = game_data.get("name")
+
+        if not isinstance(app_id, int) or not isinstance(name, str):
+            continue
+
         game = Game(
-            app_id=game_data["appid"],
-            name=game_data["name"],
+            app_id=app_id,
+            name=name,
             playtime_minutes=game_data.get("playtime_forever", 0),
             playtime_2weeks_minutes=game_data.get("playtime_2weeks", 0),
             last_played_timestamp=game_data.get("rtime_last_played", 0),
@@ -108,10 +195,6 @@ def _get_store_app_list_page(
 
     request_data[STORE_APP_TYPE_FLAGS[app_type]] = True
 
-    headers = {
-        "x-webapi-key": steam_api_key,
-    }
-
     params = {
         "input_json": json.dumps(request_data),
     }
@@ -120,49 +203,38 @@ def _get_store_app_list_page(
         _raise_if_classification_cancelled(cancel_requested)
 
         try:
-            response = session.get(
+            data = _get_steam_json(
                 STORE_APP_LIST_URL,
-                headers=headers,
+                steam_api_key,
                 params=params,
                 timeout=STORE_REQUEST_TIMEOUT,
+                session=session,
             )
-
-            response.raise_for_status()
-
-            data = response.json()
 
             response_data = data.get("response")
 
             if not isinstance(response_data, dict):
-                raise TypeError(
-                    "Steam GetAppList response did not contain a valid response object."
+                raise SteamResponseError(
+                    "Steam returned an unexpected classification response."
                 )
 
             apps = response_data.get("apps", [])
 
             if not isinstance(apps, list):
-                raise TypeError("Steam GetAppList response.apps was not a list.")
+                raise SteamResponseError(
+                    "Steam returned an unexpected application list."
+                )
 
             return response_data
 
         except (
-            requests.RequestException,
-            ValueError,
-            RuntimeError,
-        ) as error:
+            SteamRateLimitError,
+            SteamUnavailableError,
+        ):
             if attempt == STORE_MAX_ATTEMPTS:
-                raise RuntimeError(
-                    f"Steam GetAppList failed for type "
-                    f"{app_type!r} after "
-                    f"{STORE_MAX_ATTEMPTS} attempts."
-                ) from error
+                raise
 
             delay = 2 ** (attempt - 1)
-
-            print(
-                f"Steam classification request failed for "
-                f"{app_type}. Retrying in {delay}s..."
-            )
 
             end_time = time.monotonic() + delay
 
