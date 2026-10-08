@@ -37,6 +37,14 @@ HLTB_DETAIL_STEAM_CACHE = {}
 CACHE_MISS = object()
 
 
+class HLTBError(RuntimeError):
+    pass
+
+
+class HLTBUnavailableError(HLTBError):
+    pass
+
+
 def reset_hltb_stats():
     with HLTB_STATS_LOCK:
         for key in HLTB_STATS:
@@ -833,8 +841,9 @@ def search_hltb(
 
         time.sleep(delay)
 
-    raise RuntimeError(
-        f"HLTB request failed after {max_attempts} attempts for {game_name}"
+    raise HLTBUnavailableError(
+        "HowLongToBeat could not be reached after "
+        f"{max_attempts} attempts. Try again later."
     )
 
 

@@ -3,17 +3,26 @@ from threading import Event
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from api.hltb_api import HLTBError
 from api.steam_api import (
     SteamApiError,
     SteamClassificationCancelled,
     classify_owned_apps,
     get_owned_games,
 )
+from api.steamspy_api import SteamSpyError
 from storage.database import save_game
 
 
 def _format_worker_error(error):
-    if isinstance(error, SteamApiError):
+    if isinstance(
+        error,
+        (
+            SteamApiError,
+            HLTBError,
+            SteamSpyError,
+        ),
+    ):
         return str(error)
 
     return f"{type(error).__name__}: {error}"

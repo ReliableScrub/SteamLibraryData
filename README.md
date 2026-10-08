@@ -1,23 +1,32 @@
-# StreamLibraryData Summary
-A desktop Steam library tool that combines Steam playtime, achievement data, SteamSpy metadata, and HowLongToBeat estimates into one local backlog browser.
+# SteamLibraryData
 
-Originally it was going to be a small data collection script between Steam and Howlongtobeat, but it's escalated into something that would eventually give recommendation too.
+SteamLibraryData is a desktop Steam library and backlog manager that combines Steam playtime and achievement data with SteamSpy metadata and HowLongToBeat estimates.
+
+The project started as a small data-collection tool for combining Steam and HowLongToBeat information, but has gradually expanded into a full local backlog browser with filtering, activity tracking, data management, and future recommendation features.
 
 ## Current Features
-- Import an owned Steam library and playtime data
-- Store library data locally with SQLite
+
+- Import an owned Steam library with playtime and recent activity data
+- Store collected data locally with SQLite
 - Collect genres and tags from SteamSpy
 - Match games with HowLongToBeat completion estimates
+- Review ambiguous HowLongToBeat matches before accepting them
 - Track Steam achievement progress
-- Search and filter the library through name, playtime, and HLTB length
+- Classify Steam library entries such as games, DLC, and software
+- Search, filter, and sort the library
+- Track automatic and manual backlog statuses
+- View selected-game details, artwork, metadata, and Steam trailers
 - Pick a random game from the currently filtered library
-- Bind a local database to one Steam account to avoid accidentally mixing libraries
+- Update missing external data in the background without blocking the interface
+- Cancel long-running update operations
+- Bind the local database to one Steam account to prevent accidental library mixing
+- Manage SteamID64 and Steam Web API credentials from the Settings tab
 
 ## Steam Web API Setup
 
-SteamLibraryData uses the official Steam Web API to import your owned games and retrieve account-specific Steam data.
+SteamLibraryData uses the official Steam Web API to import owned games and retrieve account-specific Steam data.
 
-Because Steam Web API keys are tied to individual Steam accounts, **this does not include or distribute an API key**. You must provide your own key.
+The application does **not** include or distribute a Steam Web API key. Each user must provide their own.
 
 ### Requirements
 
@@ -25,193 +34,205 @@ You will need:
 
 - your SteamID64
 - your personal Steam Web API key
-- a Steam account with the required profile/library visibility for the data you want to retrieve
+- appropriate Steam profile and library visibility for the data you want to retrieve
+
+A standard Steam Web API key can be registered at:
+
+https://steamcommunity.com/dev/apikey
+
+SteamLibraryData does not require your Steam password, Steam Guard information, or a Steamworks publisher key.
 
 ### Configuration
 
-For development, create a `.env` file in the project root:
+On first launch, SteamLibraryData asks for your Steam Web API key.
 
-```env
-STEAM_ID=YOUR_STEAMID64
-STEAM_API_KEY=YOUR_STEAM_WEB_API_KEY
-```
+The key is stored using the operating system's credential manager rather than in the SQLite database or `settings.json`.
 
-Do not commit this file to Git.
+Your SteamID64 and Steam Web API key can later be changed from the **Settings** tab.
 
-Your API key should be treated as a private credential. Never post it publicly or include it in screenshots, bug reports, or repository files.
+Changing to a different Steam account requires resetting the account-specific local database so data from multiple Steam accounts is not mixed.
 
-Future packaged versions of SteamLibraryData may provide an in-app setup screen instead of requiring manual `.env` configuration.
+Treat your Steam Web API key as a private credential. Do not post it publicly or include it in screenshots, bug reports, or repository files.
 
+## Local Data
 
+SteamLibraryData stores user data outside the project directory in the operating system's application-data location.
+
+- **Windows:** `%APPDATA%\SteamLibraryData`
+- **macOS:** `~/Library/Application Support/SteamLibraryData`
+- **Linux:** `$XDG_DATA_HOME/SteamLibraryData` or `~/.local/share/SteamLibraryData`
+
+This includes the local SQLite database, normal application settings, and cached game artwork.
+
+The Steam Web API key is stored separately through the operating system credential manager.
 
 ## Project Progress
 
 ### Phase 1 - Data Collection and First GUI
 
-The first phase focused on getting the different data sources working together and building the first usable desktop interface.
-
-This included Steam, SteamSpy, HowLongToBeat, achievements, persistence, and filtering. 
+The first phase established the core application: Steam library importing, SteamSpy metadata, HowLongToBeat estimates, achievements, local persistence, filtering, and the first usable GUI.
 
 [Read the Phase 1 progress notes](progress/01-Assembling-the-GUI/README.MD)
 
 ### Phase 2 - Expansion
 
-The second phase focuses on tuning the GUI for future expansion.
+Phase 2 expanded the application structure and prepared the GUI for a larger feature set.
 
-This includes the redesigned layout, SQLite account ownership, game artwork, image caching, settings, first-run setup, and safer Steam library refreshing.
+This included the redesigned layout, SQLite account ownership, game artwork, image caching, settings, first-run setup, and safer Steam library refreshing.
 
 [Read the Phase 2 progress notes](progress/02-Expansion/README.MD)
 
-### Phase 2.5 - UI Improvements - Status, Activity, and Media
+### Phase 2.5 - Status, Activity, and Media
 
-The Steam library view has been expanded into more of an actual backlog manager. Games now track recent activity and last-played dates, have automatic and manual statuses, and show more information directly in the main table.
+Phase 2.5 moved SteamLibraryData closer to a full backlog manager.
 
-The game details panel was also expanded with activity information, genres, tags, store links, and on-demand Steam trailer playback.
+Games gained recent activity, last-played dates, automatic and manual statuses, richer selected-game details, store links, and on-demand Steam trailer playback.
 
-This phase also included a number of UI and data fixes, particularly preserving previously collected metadata during Steam refreshes and making the interface resize properly on larger or smaller windows.
-
-The library table was also reworked after large-library testing exposed a performance problem. The original `QTableWidget` implementation rebuilt tens of thousands of cell objects whenever the library was sorted. It was replaced with a `QTableView` backed by a custom table model, which made sorting a library of several thousand games effectively instant.
+The library table was also migrated from `QTableWidget` to a `QTableView` backed by a custom model after large-library testing exposed significant sorting-performance problems.
 
 [Read the Phase 2.5 progress notes](progress/02.5-Status-Activity-and-Media/README.MD)
 
 ### Phase 3 - External Data Infrastructure
 
-Phase 3 - External Data Infrastructure and Reliability
+Phase 3 focused on making external-data updates reliable enough for large Steam libraries.
 
-The third phase focused on making the project's external-data systems reliable enough to handle a large Steam library without blocking the interface or silently storing bad results.
+Steam, SteamSpy, HowLongToBeat, and achievement updates were moved into background workers with progress reporting, cancellation, safer persistence, and better failure handling.
 
-Background update workers were expanded with progress reporting, cancellation, safer persistence, and better failure handling. HowLongToBeat matching was substantially improved with conservative title matching, manual review for ambiguous results, Steam App ID verification, result caching, and a persistent search client that avoids repeating expensive connection and authentication setup.
+HowLongToBeat matching was expanded with conservative automatic matching, manual review for ambiguous results, Steam App ID verification, caching, and a persistent search client.
 
-This phase also added official Steam app classification and reorganized the growing GUI into separate library, updates, settings, controller, and table-model components.
+This phase also added Steam app classification and reorganized the GUI into separate library, update, settings, controller, and table-model components.
 
 [Read the Phase 3 progress notes](progress/03-External-Data-Infrastructure/README.MD)
 
+### Phase 4 - User Configuration and Application Hardening
+
+Phase 4 focuses on preparing SteamLibraryData to behave like a normal standalone desktop application rather than a development-only project.
+
+Work completed so far includes:
+
+- moving database, settings, and cached images into OS application-data directories
+- replacing `.env` configuration with in-app settings
+- securely storing the Steam Web API key through the OS credential manager
+- adding first-run API key setup and validation
+- adding SteamID64 and API-key management to the Settings tab
+- adding official repository, feedback, and bug-report links
+- improving Steam, SteamSpy, and HowLongToBeat network failure handling
+- preserving existing local data when external-service updates fail
+
+The remaining Phase 4 work is primarily documentation and final regression testing.
+
+[Read the Phase 4 progress notes](progress/04-User-Config/README.MD)
+
 ## Technology
+
 - **Python**
 - **PySide6 / Qt** for the desktop GUI
-  - `QTableView` with a custom `QAbstractTableModel` for the game library
-  - `QSplitter` and responsive layouts for the main interface
-  - Qt Multimedia / `QMediaPlayer` for embedded Steam trailer playback
+  - `QTableView` and `QAbstractTableModel` for the game library
+  - responsive Qt layouts and splitters
+  - Qt Multimedia for Steam trailer playback
 - **SQLite** for persistent local storage
-- **requests** for Steam and SteamSpy API access
-- **python-dotenv** for local API key configuration
+- **requests** for HTTP API access
+- **keyring** for secure Steam Web API credential storage
 - **howlongtobeatpy** for HowLongToBeat data
-- **Steam Web API** for owned games, playtime, and achievements
-- **Steam Store metadata** for artwork, store links, and trailer information
+- **Steam Web API** for owned games, playtime, achievements, and Steam application data
+- **SteamSpy** for genres and tags
+- **Steam Store data** for artwork, store links, and trailer information
 
-## Current Progress
-- Steam library import with playtime and recent activity data
-- SteamSpy, HowLongToBeat, and achievement data collection
-- SQLite for collected game data
-- PySide6 desktop GUI with search, filtering, sorting, and manual game statuses
-- Selected-game details with artwork, activity, genres, tags, and Steam trailer playback
-- Responsive layout that works with large libraries
-- Qt model/view table architecture for fast sorting across several thousand games
-- Incremental update tools for missing game data
-
-## Next Steps
-- Run API updates in background threads
-- Combine data updates into one button
-- Add genre/tag filtering
-- Add HLTB match review
-- Add local machine-learning recommendations
-
-## SteamLibraryData Documentation
+## Data Sources
 
 ### Steam Web API
 
-https://partner.steamgames.com/doc/webapi_overview  
+SteamLibraryData currently uses the Steam Web API for:
+
+- owned games
+- Steam App IDs
+- game names
+- lifetime playtime
+- recent two-week playtime
+- last-played timestamps
+- achievement data
+- Steam application classification
+
+Documentation:
+
+https://partner.steamgames.com/doc/webapi_overview
+
 https://partner.steamgames.com/doc/webapi
 
-Currently used for:
+### Steam Store
 
-- Owned games
-- Steam App IDs
-- Game names
-- Lifetime playtime
-- Recent two-week playtime
-- Last-played timestamps
-- Achievement data
+Steam Store data is used for:
 
-### Steam Store Data
+- game artwork
+- store links
+- trailer metadata and playback
 
-https://store.steampowered.com/api/appdetails
-
-Currently used for:
-
-- Steam trailer metadata
-- HLS trailer stream URLs
-- Direct MP4/WebM trailer fallbacks when available
-
-Trailer information is requested only when the user chooses to watch a trailer.
+Trailer information is requested only when needed.
 
 ### SteamSpy
 
+SteamSpy is used for:
+
+- genres
+- tags
+
 https://steamspy.com/about
 
-Request:
+### HowLongToBeat
 
-`request=appdetails`  
-`appid=<Steam App ID>`
+HowLongToBeat data is used for:
 
-Currently used for:
+- main story time
+- main + extra time
+- completionist time
+- all-styles time
+- match information
+- manual review of uncertain matches
 
-- Genres
-- Tags
-
-### HowLongToBeatPy
+SteamLibraryData uses the `howlongtobeatpy` package as part of its HLTB integration.
 
 https://pypi.org/project/howlongtobeatpy/
 
-Package: `howlongtobeatpy`
+## Local Storage
 
-Currently used for:
+SQLite is used for persistent application data, including:
 
-- Main story time
-- Main + extra time
-- Completionist time
-- All-styles time
-- Match name
-- Match similarity
-
-### SQLite
-
-https://docs.python.org/3/library/sqlite3.html
-
-Python module: `sqlite3`
-
-Currently used for:
-
-- Persistent game data
+- Steam library information
 - Steam account association
-- Steam activity data
-- HLTB data
+- playtime and activity data
+- Steam classification
+- HowLongToBeat data
 - SteamSpy genres and tags
-- Achievement data
-- Manual game statuses
+- achievement progress
+- manual game statuses
 
-### PySide6 / Qt
-
-https://doc.qt.io/qtforpython-6/
-
-Currently used for:
-
-- Desktop GUI
-- Responsive layouts and splitters
-- `QTableView` and `QAbstractTableModel` for the game library
-- Qt Multimedia for embedded Steam trailer playback
-- Opening Steam store pages in the user's browser
+Game artwork is cached separately on disk.
 
 ## Current Focus
 
-The next major step is moving updates away from the main GUI thread.
+The current focus is completing **Phase 4 - User Configuration and Application Hardening**.
 
-This should allow Steam, SteamSpy, HLTB, and achievement updates to run in the background while the rest of the application remains responsive.
+Remaining work:
 
-After that:
-- Progress indicators for data updates
-- One button for updating missing game data
-- Manual refresh options for older HLTB and metadata
-- Better genre/tag filtering
-- HLTB mismatch review
-- Personalized machine-learning recommendations
+- finalize user-facing setup documentation
+- run a final regression and cleanup pass
+- remove obsolete dependencies and dead code
+
+After Phase 4, **Phase 5** will focus on distribution:
+
+- Windows executable packaging
+- macOS packaging
+- clean-machine installation testing
+- packaging-specific fixes
+- code signing and notarization considerations
+
+## Future Ideas
+
+Potential future work includes:
+
+- improved genre and tag filtering
+- per-game refresh controls for external metadata
+- saved and external guide links
+- additional backlog-management tools
+- personalized local game recommendations
+- further packaging and distribution improvements
