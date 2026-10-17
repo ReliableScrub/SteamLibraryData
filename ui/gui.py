@@ -18,9 +18,9 @@ from PySide6.QtWidgets import (
 )
 
 from api.steam_api import (
+    SteamApiError,
     SteamApiKeyRejected,
-    SteamApiValidationError,
-    validate_steam_api_key,
+    validate_steam_account,
 )
 from storage.credentials import set_steam_api_key
 from storage.database import (
@@ -51,14 +51,18 @@ def open_external_url(url):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, games, steam_api_key):
+    def __init__(self, games, steam_api_key, steam_id):
         super().__init__()
 
         self.games = games
         self.steam_api_key = steam_api_key
-        self.steam_id = None
+        self.steam_id = steam_id
         self.close_after_updates_stop = False
-        self.update_controller = UpdateController(self.games, self.steam_api_key, self)
+        self.update_controller = UpdateController(
+            self.games,
+            self.steam_api_key,
+            self,
+        )
 
         self.setWindowTitle("Steam Backlog")
         self.resize(1100, 700)
@@ -115,8 +119,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(feedback_heading)
 
         feedback_text = QLabel(
-            "Have an idea, suggestion, or general feedback about the application? "
-            "Use GitHub Discussions."
+            "Have an idea, suggestion, or general feedback about the "
+            "application? Use GitHub Discussions."
         )
         feedback_text.setWordWrap(True)
         layout.addWidget(feedback_text)
@@ -147,7 +151,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(support_heading)
 
         support_text = QLabel(
-            "If you like using this and want to support me in general, you can buy me a coffee. We run on it. Sadly."
+            "If you like using this and want to support me in general, "
+            "you can buy me a coffee. We run on it. Sadly."
         )
         support_text.setWordWrap(True)
         layout.addWidget(support_text)
@@ -166,13 +171,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.library_tab = LibraryTab(self.games, self)
         self.updates_tab = DataUpdatesTab(self)
-        saved_steam_id = get_saved_steam_id()
-
-        if saved_steam_id is None:
-            saved_steam_id = get_database_steam_id()
 
         self.settings_tab = SettingsTab(
-            saved_steam_id,
+            self.steam_id,
             bool(self.steam_api_key),
             self,
         )
@@ -188,19 +189,25 @@ class MainWindow(QMainWindow):
 
     def _bind_tabs(self):
         self.library_tab.data_changed.connect(self.update_controller.refresh_statuses)
+
         self.updates_tab.library_button.clicked.connect(self.start_library_refresh)
+
         self.updates_tab.steam_classification_button.clicked.connect(
             self.start_steam_classification
         )
+
         self.updates_tab.hltb_button.clicked.connect(self.start_hltb_update)
 
         self.updates_tab.hltb_review_button.clicked.connect(
             self.library_tab.review_hltb_matches
         )
+
         self.updates_tab.metadata_button.clicked.connect(self.start_metadata_update)
+
         self.updates_tab.achievement_button.clicked.connect(
             self.start_achievement_update
         )
+
         self.updates_tab.update_all_button.clicked.connect(
             self.start_missing_data_update
         )
@@ -208,45 +215,54 @@ class MainWindow(QMainWindow):
         self.updates_tab.cancel_updates_button.clicked.connect(self.cancel_updates)
 
         self.settings_tab.change_steam_id_button.clicked.connect(self.change_steam_id)
+
         self.settings_tab.change_api_key_button.clicked.connect(self.change_api_key)
+
         self.settings_tab.clear_images_button.clicked.connect(self.clear_cached_images)
+
         self.settings_tab.reset_database_button.clicked.connect(self.reset_database)
 
     def _bind_update_controller(self):
         self.update_controller.status_changed.connect(self.updates_tab.set_status)
+
         self.update_controller.progress_changed.connect(self.updates_tab.set_progress)
+
         self.update_controller.busy_changed.connect(self._update_busy_state)
+
         self.update_controller.review_available_changed.connect(
             self.updates_tab.set_review_available
         )
 
         self.update_controller.games_changed.connect(self._games_changed)
+
         self.update_controller.data_changed.connect(self.library_tab.refresh_data)
+
         self.update_controller.error.connect(self._show_update_error)
+
         self.update_controller.item_failed.connect(print)
 
     def _update_busy_state(self, busy):
         self.updates_tab.set_busy(busy)
 
         self.settings_tab.change_steam_id_button.setEnabled(not busy)
+
         self.settings_tab.change_api_key_button.setEnabled(not busy)
+
         self.settings_tab.reset_database_button.setEnabled(not busy)
 
     def _games_changed(self, games):
         self.games = games
-
         self.library_tab.set_games(games)
 
     def _show_update_error(self, title, message):
-        QMessageBox.warning(self, title, message)
+        QMessageBox.warning(
+            self,
+            title,
+            message,
+        )
 
     def start_library_refresh(self):
-        steam_id = self.get_steam_id()
-
-        if steam_id is None:
-            return
-
-        self.update_controller.start_library_refresh(steam_id)
+        self.update_controller.start_library_refresh(self.steam_id)
 
     def start_steam_classification(self):
         result = self.update_controller.start_classification()
@@ -263,7 +279,9 @@ class MainWindow(QMainWindow):
 
         if result == "nothing":
             QMessageBox.information(
-                self, "HLTB", "All games have already been checked."
+                self,
+                "HLTB",
+                "All games have already been checked.",
             )
 
     def start_metadata_update(self):
@@ -271,39 +289,35 @@ class MainWindow(QMainWindow):
 
         if result == "nothing":
             QMessageBox.information(
-                self, "Metadata", "All games already have genre/tag data."
+                self,
+                "Metadata",
+                "All games already have genre/tag data.",
             )
 
     def start_achievement_update(self):
         if self.update_controller.achievement_pending_count() == 0:
             QMessageBox.information(
-                self, "Achievements", "There are no games that need achievement data."
+                self,
+                "Achievements",
+                "There are no games that need achievement data.",
             )
-
             return
 
-        steam_id = self.get_steam_id()
-
-        if steam_id is None:
-            return
-
-        self.update_controller.start_achievement_batch(steam_id)
+        self.update_controller.start_achievement_batch(self.steam_id)
 
     def start_missing_data_update(self):
         if not self.update_controller.has_missing_data():
             QMessageBox.information(
-                self, "Missing Data", "All games have already been checked."
+                self,
+                "Missing Data",
+                "All games have already been checked.",
             )
-
             return
 
         steam_id = None
 
         if self.update_controller.missing_data_needs_steam_id():
-            steam_id = self.get_steam_id()
-
-            if steam_id is None:
-                return
+            steam_id = self.steam_id
 
         self.update_controller.start_all_missing(steam_id)
 
@@ -312,69 +326,10 @@ class MainWindow(QMainWindow):
         self.update_controller.cancel()
 
     def get_steam_id(self):
-        if self.steam_id is not None:
-            return self.steam_id
-
-        saved_steam_id = get_saved_steam_id()
-
-        if saved_steam_id is None:
-            saved_steam_id = get_database_steam_id()
-
-            if saved_steam_id is not None:
-                save_steam_id(saved_steam_id)
-
-        if saved_steam_id is not None:
-            try:
-                set_database_steam_id(saved_steam_id)
-            except ValueError as error:
-                QMessageBox.warning(
-                    self,
-                    "Steam Account",
-                    str(error),
-                )
-                return None
-
-            self.steam_id = saved_steam_id
-            return self.steam_id
-
-        steam_id, accepted = QInputDialog.getText(
-            self,
-            "Steam ID",
-            "Enter your SteamID64:",
-        )
-
-        if not accepted:
-            return None
-
-        steam_id = steam_id.strip()
-
-        if not steam_id.isdigit():
-            QMessageBox.warning(
-                self,
-                "Invalid Steam ID",
-                "SteamID64 must contain only numbers.",
-            )
-            return None
-
-        try:
-            set_database_steam_id(steam_id)
-            save_steam_id(steam_id)
-        except ValueError as error:
-            QMessageBox.warning(
-                self,
-                "Steam Account",
-                str(error),
-            )
-            return None
-
-        self.steam_id = steam_id
-
-        self.settings_tab.set_steam_id(steam_id)
-
         return self.steam_id
 
     def change_steam_id(self):
-        current_steam_id = get_saved_steam_id()
+        current_steam_id = self.steam_id
 
         steam_id, accepted = QInputDialog.getText(
             self,
@@ -387,6 +342,14 @@ class MainWindow(QMainWindow):
             return
 
         steam_id = steam_id.strip()
+
+        if not steam_id:
+            QMessageBox.warning(
+                self,
+                "Invalid Steam ID",
+                "SteamID64 cannot be empty.",
+            )
+            return
 
         if not steam_id.isdigit():
             QMessageBox.warning(
@@ -404,6 +367,37 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            valid_account = validate_steam_account(
+                steam_id,
+                self.steam_api_key,
+            )
+
+        except SteamApiKeyRejected as error:
+            QMessageBox.warning(
+                self,
+                "Steam Rejected API Key",
+                str(error),
+            )
+            return
+
+        except SteamApiError as error:
+            QMessageBox.warning(
+                self,
+                "Could Not Verify SteamID64",
+                f"{error}\n\nThe Steam account has not been changed.",
+            )
+            return
+
+        if not valid_account:
+            QMessageBox.warning(
+                self,
+                "Steam Account Not Found",
+                "Steam could not find an account with that SteamID64.\n\n"
+                "Check the number and try again.",
+            )
+            return
+
         database_steam_id = get_database_steam_id()
 
         if database_steam_id is not None and database_steam_id != steam_id:
@@ -413,7 +407,8 @@ class MainWindow(QMainWindow):
                 "The current local database belongs to a different Steam "
                 "account.\n\n"
                 "Switching accounts requires deleting the current local "
-                "database so library data from the two accounts is not mixed.\n\n"
+                "database so library data from the two accounts is not "
+                "mixed.\n\n"
                 "Your image cache will be kept.\n\n"
                 "Switch accounts and reset the local database?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -429,10 +424,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Steam Account Changed",
-                "The SteamID64 has been changed and the old account's local "
-                "database has been removed.\n\n"
-                "The application will now close. On the next launch you can "
-                "import the new Steam library.",
+                "The SteamID64 has been changed and the old account's "
+                "local database has been removed.\n\n"
+                "The application will now close. On the next launch you "
+                "can import the new Steam library.",
             )
 
             QApplication.quit()
@@ -441,6 +436,7 @@ class MainWindow(QMainWindow):
         try:
             set_database_steam_id(steam_id)
             save_steam_id(steam_id)
+
         except ValueError as error:
             QMessageBox.warning(
                 self,
@@ -459,9 +455,20 @@ class MainWindow(QMainWindow):
         )
 
     def change_api_key(self):
-        new_api_key = prompt_for_steam_api_key()
+        new_api_key = prompt_for_api_key_change(self.steam_id)
 
         if new_api_key is None:
+            return
+
+        try:
+            set_steam_api_key(new_api_key)
+
+        except RuntimeError as error:
+            QMessageBox.critical(
+                self,
+                "Credential Storage Error",
+                str(error),
+            )
             return
 
         self.steam_api_key = new_api_key
@@ -471,23 +478,27 @@ class MainWindow(QMainWindow):
             self,
             "Steam Web API Key Changed",
             "The new Steam Web API key has been saved securely.\n\n"
-            "The application will now close so all Steam services use the "
-            "new key when it is reopened.",
+            "The application will now close so all Steam services use "
+            "the new key when it is reopened.",
         )
 
         QApplication.quit()
 
     def clear_cached_images(self):
         clear_image_cache()
+
         QMessageBox.information(
-            self, "Image Cache", "Cached game images have been deleted."
+            self,
+            "Image Cache",
+            "Cached game images have been deleted.",
         )
 
     def reset_database(self):
         result = QMessageBox.question(
             self,
             "Reset Local Database",
-            "Delete all locally collected Steam, HLTB, SteamSpy, achievement, and cached image data?",
+            "Delete all locally collected Steam, HLTB, SteamSpy, "
+            "achievement, and cached image data?",
         )
 
         if result != QMessageBox.StandardButton.Yes:
@@ -495,6 +506,7 @@ class MainWindow(QMainWindow):
 
         clear_image_cache()
         delete_database()
+
         QMessageBox.information(
             self,
             "Database Reset",
@@ -517,68 +529,214 @@ class MainWindow(QMainWindow):
         if self.update_controller.is_running():
             if not self.close_after_updates_stop:
                 self.close_after_updates_stop = True
-
                 self.update_controller.cancel()
 
             event.ignore()
-            QTimer.singleShot(100, self.close)
-
+            QTimer.singleShot(
+                100,
+                self.close,
+            )
             return
 
         self.library_tab.stop_trailer()
         event.accept()
 
 
-def prompt_for_steam_api_key():
+def prompt_for_steam_setup(
+    existing_steam_id=None,
+    existing_api_key=None,
+):
     dialog = QDialog()
-    dialog.setWindowTitle("Steam Web API Key Required")
+    dialog.setWindowTitle("Steam Setup")
     dialog.setMinimumWidth(600)
 
     layout = QVBoxLayout(dialog)
     layout.setSpacing(14)
 
-    heading = QLabel("<h2>Steam Backlog DB needs a Steam Web API key</h2>")
+    heading = QLabel("<h2>Connect your Steam account</h2>")
     heading.setWordWrap(True)
     layout.addWidget(heading)
 
     explanation = QLabel(
-        "The Steam Backlog DB uses the Steam Web API to import your owned games, "
-        "retrieve achievement information, and access other Steam library data."
+        "Steam Backlog DB needs your <b>SteamID64</b> and a "
+        "<b>Steam Web API key</b> to access your Steam library data."
         "<br><br>"
-        "<b>This is not your Steam password.</b> Steam Backlog DB will never "
-        "ask for or store your Steam password."
+        "Both will be checked with Steam before anything is saved."
         "<br><br>"
-        "Your API key is stored using your operating system's credential store. "
-        "It is not stored in the Steam Backlog database or in settings.json."
+        "<b>This is not your Steam password.</b> Steam Backlog DB "
+        "will never ask for or store your Steam password."
     )
     explanation.setWordWrap(True)
     layout.addWidget(explanation)
 
-    usage_note = QLabel(
-        "<b>What does Steam Backlog DB do with the key?</b><br>"
-        "The key is used to authenticate requests made to Steam's Web API. "
-        "Doing so will give us the ability to fill up the database with all current information"
-        "on the spot."
+    steam_id_label = QLabel("<b>SteamID64</b>")
+    layout.addWidget(steam_id_label)
+
+    steam_id_input = QLineEdit()
+    steam_id_input.setPlaceholderText("Enter your SteamID64")
+
+    if existing_steam_id:
+        steam_id_input.setText(existing_steam_id)
+
+    layout.addWidget(steam_id_input)
+
+    api_key_label = QLabel("<b>Steam Web API Key</b>")
+    layout.addWidget(api_key_label)
+
+    api_key_input = QLineEdit()
+    api_key_input.setPlaceholderText("Enter your Steam Web API key")
+    api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+    if existing_api_key:
+        api_key_input.setText(existing_api_key)
+
+    layout.addWidget(api_key_input)
+
+    api_help = QLabel(
+        "Use a <b>standard Steam Web API user key</b>. "
+        "You can create or view one at "
+        '<a href="https://steamcommunity.com/dev/apikey">'
+        "Steam Web API Key Registration</a>."
     )
-    usage_note.setWordWrap(True)
-    layout.addWidget(usage_note)
+    api_help.setWordWrap(True)
+    api_help.setOpenExternalLinks(True)
+    layout.addWidget(api_help)
+
+    storage_note = QLabel(
+        "Your SteamID64 is stored as a normal application setting. "
+        "Your API key is stored separately using your operating "
+        "system's credential manager."
+    )
+    storage_note.setWordWrap(True)
+    layout.addWidget(storage_note)
 
     security_note = QLabel(
         "<b>Security note:</b> Only enter an API key into a copy of "
         "Steam Backlog DB that you trust.<br><br>"
         "The official source code for this project is available at:<br>"
-        f'<a href="{OFFICIAL_REPOSITORY_URL}">{OFFICIAL_REPOSITORY_URL}</a>'
-        "<br><br>"
-        "If you downloaded this application from somewhere else, verify "
-        "the source before entering a credential."
+        f'<a href="{OFFICIAL_REPOSITORY_URL}">'
+        f"{OFFICIAL_REPOSITORY_URL}</a>"
     )
     security_note.setWordWrap(True)
     security_note.setOpenExternalLinks(True)
     layout.addWidget(security_note)
 
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+    )
+
+    verify_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+    verify_button.setText("Verify and Continue")
+
+    layout.addWidget(buttons)
+
+    verified_data = {}
+
+    def verify_setup():
+        steam_id = steam_id_input.text().strip()
+        api_key = api_key_input.text().strip()
+
+        if not steam_id:
+            QMessageBox.warning(
+                dialog,
+                "Steam Setup",
+                "SteamID64 cannot be empty.",
+            )
+            return
+
+        if not steam_id.isdigit():
+            QMessageBox.warning(
+                dialog,
+                "Steam Setup",
+                "SteamID64 must contain only numbers.",
+            )
+            return
+
+        if not api_key:
+            QMessageBox.warning(
+                dialog,
+                "Steam Setup",
+                "Steam Web API key cannot be empty.",
+            )
+            return
+
+        try:
+            valid_account = validate_steam_account(
+                steam_id,
+                api_key,
+            )
+
+        except SteamApiKeyRejected as error:
+            QMessageBox.warning(
+                dialog,
+                "Steam Rejected API Key",
+                str(error),
+            )
+            return
+
+        except SteamApiError as error:
+            QMessageBox.warning(
+                dialog,
+                "Could Not Verify Steam Setup",
+                f"{error}\n\n"
+                "Nothing has been saved. Check your connection and "
+                "try again.",
+            )
+            return
+
+        if not valid_account:
+            QMessageBox.warning(
+                dialog,
+                "Steam Account Not Found",
+                "Steam accepted the API key, but could not find an "
+                "account with that SteamID64.\n\n"
+                "Check the SteamID64 and try again.",
+            )
+            return
+
+        verified_data["steam_id"] = steam_id
+        verified_data["api_key"] = api_key
+
+        dialog.accept()
+
+    buttons.accepted.connect(verify_setup)
+
+    buttons.rejected.connect(dialog.reject)
+
+    result = dialog.exec()
+
+    if result != QDialog.DialogCode.Accepted:
+        return None
+
+    return (
+        verified_data["steam_id"],
+        verified_data["api_key"],
+    )
+
+
+def prompt_for_api_key_change(steam_id):
+    dialog = QDialog()
+    dialog.setWindowTitle("Change Steam Web API Key")
+    dialog.setMinimumWidth(550)
+
+    layout = QVBoxLayout(dialog)
+    layout.setSpacing(14)
+
+    heading = QLabel("<h2>Change Steam Web API Key</h2>")
+    heading.setWordWrap(True)
+    layout.addWidget(heading)
+
+    explanation = QLabel(
+        "Enter the new Steam Web API key. It will be checked against "
+        "your configured Steam account before it is saved."
+        "<br><br>"
+        "<b>This is not your Steam password.</b>"
+    )
+    explanation.setWordWrap(True)
+    layout.addWidget(explanation)
+
     api_help = QLabel(
-        "Use a <b>standard Steam Web API user key</b>. You can create or "
-        "view one at "
+        "You can create or view a standard Steam Web API key at "
         '<a href="https://steamcommunity.com/dev/apikey">'
         "Steam Web API Key Registration</a>."
     )
@@ -587,16 +745,22 @@ def prompt_for_steam_api_key():
     layout.addWidget(api_help)
 
     api_key_input = QLineEdit()
-    api_key_input.setPlaceholderText("Enter your Steam Web API key")
+    api_key_input.setPlaceholderText("Enter your new Steam Web API key")
     api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
     layout.addWidget(api_key_input)
 
     buttons = QDialogButtonBox(
         QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
     )
+
+    verify_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+    verify_button.setText("Verify and Save")
+
     layout.addWidget(buttons)
 
-    def save_api_key():
+    verified_key = {}
+
+    def verify_key():
         api_key = api_key_input.text().strip()
 
         if not api_key:
@@ -608,7 +772,10 @@ def prompt_for_steam_api_key():
             return
 
         try:
-            validate_steam_api_key(api_key)
+            valid_account = validate_steam_account(
+                steam_id,
+                api_key,
+            )
 
         except SteamApiKeyRejected as error:
             QMessageBox.warning(
@@ -618,35 +785,28 @@ def prompt_for_steam_api_key():
             )
             return
 
-        except SteamApiValidationError as error:
-            result = QMessageBox.question(
+        except SteamApiError as error:
+            QMessageBox.warning(
                 dialog,
                 "Could Not Verify API Key",
-                f"{error}\n\n"
-                "This does not necessarily mean the key is invalid. "
-                "Steam may be unavailable or your internet connection may "
-                "be offline.\n\n"
-                "Save the key anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-
-            if result != QMessageBox.StandardButton.Yes:
-                return
-
-        try:
-            set_steam_api_key(api_key)
-        except RuntimeError as error:
-            QMessageBox.critical(
-                dialog,
-                "Credential Storage Error",
-                str(error),
+                f"{error}\n\nThe API key has not been changed.",
             )
             return
 
+        if not valid_account:
+            QMessageBox.warning(
+                dialog,
+                "Steam Account Verification Failed",
+                "Steam accepted the API key, but it could not verify "
+                "the configured Steam account with that key.",
+            )
+            return
+
+        verified_key["api_key"] = api_key
         dialog.accept()
 
-    buttons.accepted.connect(save_api_key)
+    buttons.accepted.connect(verify_key)
+
     buttons.rejected.connect(dialog.reject)
 
     result = dialog.exec()
@@ -654,19 +814,78 @@ def prompt_for_steam_api_key():
     if result != QDialog.DialogCode.Accepted:
         return None
 
-    return api_key_input.text().strip()
+    return verified_key["api_key"]
 
 
 def run_gui(games, steam_api_key):
     app = QApplication(sys.argv)
 
-    if not steam_api_key:
-        steam_api_key = prompt_for_steam_api_key()
+    saved_steam_id = get_saved_steam_id()
+    database_steam_id = get_database_steam_id()
 
-        if steam_api_key is None:
+    if saved_steam_id is None and database_steam_id is not None:
+        saved_steam_id = database_steam_id
+        save_steam_id(saved_steam_id)
+
+    if (
+        saved_steam_id is not None
+        and database_steam_id is not None
+        and saved_steam_id != database_steam_id
+    ):
+        QMessageBox.critical(
+            None,
+            "Steam Account Mismatch",
+            "The configured SteamID64 does not match the Steam account "
+            "associated with the local database.\n\n"
+            "SteamLibraryData will not open this database because doing "
+            "so could mix data from two Steam accounts.",
+        )
+        return
+
+    steam_id = saved_steam_id or database_steam_id
+
+    if not steam_api_key or not steam_id:
+        setup = prompt_for_steam_setup(
+            existing_steam_id=steam_id,
+            existing_api_key=steam_api_key,
+        )
+
+        if setup is None:
             return
 
-    window = MainWindow(games, steam_api_key)
+        steam_id, steam_api_key = setup
+
+        try:
+            set_database_steam_id(steam_id)
+            save_steam_id(steam_id)
+            set_steam_api_key(steam_api_key)
+
+        except (RuntimeError, ValueError, OSError) as error:
+            QMessageBox.critical(
+                None,
+                "Steam Setup",
+                "Steam Backlog DB could not save the verified "
+                f"configuration:\n\n{error}",
+            )
+            return
+
+    else:
+        try:
+            set_database_steam_id(steam_id)
+
+        except ValueError as error:
+            QMessageBox.critical(
+                None,
+                "Steam Account",
+                str(error),
+            )
+            return
+
+    window = MainWindow(
+        games,
+        steam_api_key,
+        steam_id,
+    )
 
     window.show()
     app.exec()

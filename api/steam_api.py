@@ -88,7 +88,7 @@ def _get_steam_json(
 
     if response.status_code in (401, 403):
         raise SteamApiKeyRejected(
-            "Steam rejected your Web API key. Update it from the Settings tab."
+            "Steam rejected your Web API key. You either miswrote it or it's not working."
         )
 
     if response.status_code == 429:
@@ -440,3 +440,34 @@ def validate_steam_api_key(steam_api_key):
         )
 
     return True
+
+
+def validate_steam_account(steam_id, steam_api_key):
+    steam_id = str(steam_id).strip()
+
+    if not steam_id.isdigit():
+        return False
+
+    data = _get_steam_json(
+        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+        steam_api_key,
+        params={
+            "steamids": steam_id,
+        },
+        timeout=15,
+    )
+
+    response = data.get("response")
+
+    if not isinstance(response, dict):
+        raise SteamResponseError("Steam returned unexpected account data.")
+
+    players = response.get("players")
+
+    if not isinstance(players, list):
+        raise SteamResponseError("Steam returned unexpected account data.")
+
+    return any(
+        isinstance(player, dict) and str(player.get("steamid")) == steam_id
+        for player in players
+    )
