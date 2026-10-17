@@ -1,76 +1,146 @@
 # Phase 4 - User Configuration & Application Hardening
 
-Phase 4 is mostly about getting SteamLibraryData ready to behave like a normal desktop app instead of something that only works comfortably from the project folder.
+Phase 4 was about getting SteamLibraryData to behave more like a normal desktop application instead of something that only works comfortably from the project folder.
 
-The big goals were moving user data somewhere sensible, so getting rid of `.env` reliance, making account/API settings manageable from inside the app, and cleaning up how network failures are handled before packaging starts.
+Most of the work was behind the scenes: moving user data, replacing development-only configuration, improving first-run setup, hardening external API failures, and cleaning up the repository before moving on to larger user-facing features.
 
 ## Move User Data Out of the Project Folder
 
-The database, settings, and cached images now live in the operating system's normal application-data directory instead of inside the repository.
+The database, settings, and cached images were moved out of the repository and into the operating system's normal application-data directory.
 
-That means the source folder stays cleaner and future packaged builds won't be trying to write user data next to the executable.
+SteamLibraryData now stores its local data in:
 
-The old `games.json` cache system was also removed since SQLite has fully replaced it.
+- Windows: `%APPDATA%\SteamLibraryData`
+- macOS: `~/Library/Application Support/SteamLibraryData`
+- Linux: `$XDG_DATA_HOME/SteamLibraryData` or `~/.local/share/SteamLibraryData`
 
-## Add Normal Application Settings
+This keeps user data separate from the source code and avoids future packaged builds trying to write next to the executable.
 
-A small `settings.json` system was added for things like SteamID64.
+The old `games.json` cache was also removed since SQLite had already replaced it.
 
-The SteamID64 is now remembered as a regular app setting, while the database still stores which Steam account it belongs to.
+## Add Proper Steam Account Configuration
 
-That gives the app a default account without losing the safeguard that prevents two Steam libraries from being mixed together.
+The old `.env` configuration was removed.
 
-## Stop Using `.env` for the API Key
+SteamID64 is now stored as a normal application setting in `settings.json`, while the SQLite database still records which Steam account its data belongs to.
 
-The old `.env` setup was removed.
+This keeps the configured account easy to remember while still preventing two different Steam libraries from accidentally being mixed into the same database.
 
-Steam Web API keys are now stored through the operating system's credential manager using `keyring`.
+The Steam Web API key is stored separately through the operating system's credential manager using `keyring`.
 
-The key no longer needs to sit in the project directory and is kept separate from both `settings.json` and the SQLite database.
+It is not stored in:
 
-## Add First-Run API Setup
+- `settings.json`
+- the SQLite database
+- the project directory
 
-If no Steam Web API key is configured, the app now asks for one directly.
+The application also no longer depends on `python-dotenv`.
 
-The setup screen explains what kind of key is needed, links to Steam's API-key registration page, and makes it clear that SteamLibraryData does not need a Steam password or a Steamworks publisher key.
+### First-Run Steam Setup
 
-The key is also checked before being accepted, while network problems are treated separately from an actually invalid key.
+The original first-run setup asked for SteamID64 and the API key separately.
 
-## Make the Settings Tab Actually Manage Settings
+That worked, but it could leave the app partially configured if the user completed one prompt and cancelled the other.
 
-The Settings tab used to mostly handle things like clearing cached images and resetting the database.
+This was replaced with one combined Steam setup screen.
 
-It can now also show and change the SteamID64 and replace the saved Steam Web API key.
+The user now enters:
 
-Switching to a different Steam account resets the account-specific local database so data from two accounts cannot accidentally get mixed together.
+- SteamID64
+- Steam Web API key
 
-The image cache can stay since Steam artwork is tied to App IDs rather than a particular account.
+Both values are verified before anything is saved.
+
+The application checks that:
+
+- the SteamID64 is numeric
+- the API key is accepted by Steam
+- the SteamID64 actually belongs to a Steam account
+
+If validation fails, the setup stays open and nothing new is saved.
+
+If setup is cancelled, the main application does not open.
+
+Once both values have been verified successfully, they are saved and the main window can start.
+
+### Keep Data Collection User-Controlled
+
+Completing Steam setup does not automatically start importing or updating everything.
+
+If the database is empty, SteamLibraryData asks whether the user wants to import their Steam library.
+
+The user can decline and continue using the application without starting an import.
+
+SteamSpy, HowLongToBeat, achievement updates, Steam classification, and other bulk data updates are also started manually.
+
+SteamLibraryData does not continuously monitor a Steam account or automatically run bulk updates simply because the application is open.
+
+## Improve the Settings Tab
+
+The Settings tab was expanded so Steam configuration can be managed without editing files manually.
+
+Users can now:
+
+- view the configured SteamID64
+- change the SteamID64
+- replace the Steam Web API key
+- clear the image cache
+- reset the local database
+
+Changing the SteamID64 verifies the new account before anything is changed.
+
+If the current database belongs to another Steam account, the application warns that switching accounts requires deleting the old account-specific database.
+
+The image cache can remain because Steam artwork is tied to App IDs rather than a specific account.
+
+Changing the API key also validates the replacement key against the configured Steam account before saving it.
 
 ## Add Project and Support Links
 
-The app now includes links back to the official project repository along with places for bug reports and general feedback.
+A Contact tab was added with links to the official project resources.
 
-This gives users somewhere obvious to go if something breaks or they have an idea, and also makes it easier to tell where the official copy of the project came from.
+It includes:
 
-## Clean Up Steam API Errors
+- the GitHub repository
+- GitHub Discussions
+- GitHub Issues
+- optional project support
 
-Steam requests now handle common failures in a much more readable way.
+This gives users an obvious place to report bugs, give feedback, or confirm where the official project came from.
 
-Instead of dumping raw networking errors at the user, the app can distinguish things like:
+## Improve External Service Error Handling
 
-- a rejected API key
-- no internet connection
+Steam, SteamSpy, and HowLongToBeat were all given clearer failure handling.
+
+The application can now distinguish failures such as:
+
+- invalid or rejected credentials
+- connection failures
 - request timeouts
-- Steam rate limiting
-- Steam server problems
-- unexpected response data
+- rate limiting
+- server failures
+- malformed or unexpected responses
 
-Failed Steam updates also leave existing local data alone instead of treating a failed request like valid empty data.
+The important change is that failed requests are no longer treated like successful requests that simply returned no data.
 
-## Do the Same for SteamSpy and HowLongToBeat
+Existing local data is preserved when an external service fails.
 
-SteamSpy and HowLongToBeat got the same general cleanup.
+### Steam
 
-Temporary service or connection problems stay as failed updates so they can be retried later instead of being mistaken for valid missing metadata.
+Steam API requests now return clearer messages for common failures such as rejected API keys, connection problems, rate limits, and Steam outages.
 
-The existing HLTB matching system, retries, caching, Steam App ID checks, and manual review behavior were kept intact.
+Account validation also uses Steam directly so invalid SteamID64 values can be rejected before being saved.
+
+### SteamSpy
+
+SteamSpy now distinguishes legitimate empty metadata from temporary service failures or malformed responses.
+
+A failed request therefore does not incorrectly mark a game as having no genre or tag information.
+
+### HowLongToBeat
+
+The existing HowLongToBeat matching system was mostly left intact.
+
+Retries, caching, Steam App ID verification, conservative automatic matching, and manual review continue to work as before.
+
+The main change was making sure repeated connection failures remain actual failed updates instead of eventually being mistaken for valid no-match results.
