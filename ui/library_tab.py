@@ -24,7 +24,13 @@ from PySide6.QtWidgets import (
 
 from api.store_api import get_trailer_url
 from game_updates import apply_hltb_candidate, mark_hltb_no_match
-from storage.database import load_hltb_candidates, save_game
+from storage.database import (
+    clear_game_rating,
+    get_game_rating,
+    load_hltb_candidates,
+    save_game,
+    set_game_rating,
+)
 from storage.image_cache import get_game_image
 from ui.game_table_model import GameTableModel
 
@@ -160,6 +166,23 @@ class LibraryTab(QWidget):
         )
         self.manual_status_combo.setEnabled(False)
 
+        self.rating_label = QLabel("Your Rating:")
+        self.rating_label.setStyleSheet("font-size: 10pt;")
+
+        self.rating_combo = QComboBox()
+        self.rating_combo.addItems(
+            [
+                "Unrated",
+                "★",
+                "★★",
+                "★★★",
+                "★★★★",
+                "★★★★★",
+            ]
+        )
+        self.rating_combo.setEnabled(False)
+        self.rating_combo.setToolTip("How much you personally enjoyed this game.")
+
         self.game_details = QLabel("")
 
         self.game_details.setWordWrap(True)
@@ -230,6 +253,14 @@ class LibraryTab(QWidget):
         status_row.addWidget(self.manual_status_combo)
         status_row.addStretch()
         details_layout.addLayout(status_row)
+
+        rating_row = QHBoxLayout()
+        rating_row.addWidget(self.rating_label)
+        rating_row.addWidget(self.rating_combo)
+        rating_row.addStretch()
+
+        details_layout.addLayout(rating_row)
+
         details_layout.addWidget(self.game_details)
 
         details_layout.addStretch()
@@ -273,6 +304,7 @@ class LibraryTab(QWidget):
             lambda *_: self.show_selected_game()
         )
         self.manual_status_combo.currentTextChanged.connect(self.change_manual_status)
+        self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
         self.trailer_button.clicked.connect(self.open_selected_trailer)
@@ -485,6 +517,14 @@ class LibraryTab(QWidget):
 
         self.manual_status_combo.setEnabled(True)
         self.manual_status_combo.blockSignals(False)
+
+        rating = get_game_rating(game.app_id)
+
+        self.rating_combo.blockSignals(True)
+        self.rating_combo.setCurrentIndex(rating if rating is not None else 0)
+        self.rating_combo.setEnabled(True)
+        self.rating_combo.blockSignals(False)
+
         self.status_value.setFixedWidth(75)
 
         self.status_value.setText(status_text)
@@ -555,6 +595,18 @@ class LibraryTab(QWidget):
         self.refresh_data()
 
         self.data_changed.emit()
+
+    def change_game_rating(self, rating_index):
+        if self.selected_game is None:
+            return
+
+        if rating_index == 0:
+            clear_game_rating(self.selected_game.app_id)
+        else:
+            set_game_rating(
+                self.selected_game.app_id,
+                rating_index,
+            )
 
     def review_hltb_matches(self):
         review_games = [
@@ -731,10 +783,15 @@ class LibraryTab(QWidget):
         self.game_image.setPixmap(QPixmap())
         self.game_image.setText("Select a game")
         self.manual_status_combo.blockSignals(True)
-
         self.manual_status_combo.setCurrentText("Automatic")
         self.manual_status_combo.setEnabled(False)
         self.manual_status_combo.blockSignals(False)
+
+        self.rating_combo.blockSignals(True)
+        self.rating_combo.setCurrentIndex(0)
+        self.rating_combo.setEnabled(False)
+        self.rating_combo.blockSignals(False)
+
         self.steam_page_button.setEnabled(False)
 
         self.trailer_button.setEnabled(False)

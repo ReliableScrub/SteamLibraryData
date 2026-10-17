@@ -126,6 +126,7 @@ def initialize_database():
         """)
 
         ensure_game_columns(connection)
+        ensure_recommendation_tables(connection)
         reset_empty_hltb_checks()
 
 
@@ -435,6 +436,45 @@ def delete_games_not_in(app_ids):
                 connection.execute("DELETE FROM games WHERE app_id = ?", (app_id,))
 
 
+def ensure_recommendation_tables(connection):
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS game_ratings (
+            app_id INTEGER PRIMARY KEY,
+            rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS recommendation_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            method TEXT NOT NULL,
+            model_version INTEGER NOT NULL,
+            feature_version INTEGER NOT NULL,
+            generated_at INTEGER NOT NULL,
+            training_game_count INTEGER NOT NULL,
+            rated_game_count INTEGER NOT NULL,
+            implicit_game_count INTEGER NOT NULL,
+            candidate_game_count INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS game_recommendations (
+            app_id INTEGER PRIMARY KEY,
+            score REAL NOT NULL,
+            match_tier TEXT,
+            explanation_json TEXT,
+            generated_at INTEGER NOT NULL,
+
+            FOREIGN KEY (app_id)
+                REFERENCES games(app_id)
+                ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_game_recommendations_score
+        ON game_recommendations(score DESC);
+        """
+    )
+
+
 def ensure_game_columns(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()}
 
@@ -596,3 +636,63 @@ def clear_hltb_candidates(app_id):
             "DELETE FROM hltb_candidates WHERE app_id = ?",
             (app_id,),
         )
+
+
+def get_game_rating(app_id):
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT rating
+            FROM game_ratings
+            WHERE app_id = ?
+            """,
+            (app_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return row[0]
+
+
+def set_game_rating(app_id, rating):
+    rating = int(rating)
+
+    if rating < 1 or rating > 5:
+        raise ValueError("Rating must be between 1 and 5.")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO game_ratings (
+                app_id,
+                rating,
+                updated_at
+            )
+            VALUES (?, ?, unixepoch())
+            ON CONFLICT(app_id) DO UPDATE SET
+                rating = excluded.rating,
+                updated_at = excluded.updated_at
+            """,
+            (app_id, rating),
+        )
+
+        invalidate_recommendations(connection)
+
+
+def clear_game_rating(app_id):
+    with get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM game_ratings
+            WHERE app_id = ?
+            """,
+            (app_id,),
+        )
+
+        invalidate_recommendations(connection)
+
+
+def invalidate_recommendations(connection):
+    connection.execute("DELETE FROM game_recommendations")
+    connection.execute("DELETE FROM recommendation_state")
