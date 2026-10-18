@@ -32,6 +32,10 @@ from storage.database import (
     set_game_rating,
 )
 from storage.image_cache import get_game_image
+from storage.settings import (
+    get_library_view_settings,
+    set_library_view_settings,
+)
 from ui.game_table_model import GameTableModel
 
 
@@ -63,6 +67,7 @@ class LibraryTab(QWidget):
         self._create_details()
 
         self._create_layout()
+        self._restore_library_view()
         self._connect_signals()
         self.apply_filters()
 
@@ -291,9 +296,10 @@ class LibraryTab(QWidget):
 
     def _connect_signals(self):
         self.search_box.textChanged.connect(self.apply_filters)
-        self.status_filter.currentTextChanged.connect(self.apply_filters)
-        self.type_filter.currentTextChanged.connect(self.apply_filters)
-        self.hltb_metric_filter.currentTextChanged.connect(self.apply_filters)
+
+        self.status_filter.currentTextChanged.connect(self._library_filter_changed)
+        self.type_filter.currentTextChanged.connect(self._library_filter_changed)
+        self.hltb_metric_filter.currentTextChanged.connect(self._library_filter_changed)
 
         self.hltb_min_filter.valueChanged.connect(self.hltb_min_changed)
 
@@ -339,6 +345,74 @@ class LibraryTab(QWidget):
 
         return game.hltb_time(metric)
 
+    def _restore_library_view(self):
+        settings = get_library_view_settings()
+
+        combo_settings = [
+            (self.status_filter, settings.get("status")),
+            (self.type_filter, settings.get("type")),
+            (self.hltb_metric_filter, settings.get("hltb_metric")),
+        ]
+
+        for combo, value in combo_settings:
+            if not isinstance(value, str):
+                continue
+
+            index = combo.findText(value)
+
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+        hltb_min = settings.get("hltb_min")
+        hltb_max = settings.get("hltb_max")
+
+        if isinstance(hltb_min, (int, float)):
+            self.hltb_min_filter.setValue(hltb_min)
+
+        if isinstance(hltb_max, (int, float)):
+            self.hltb_max_filter.setValue(hltb_max)
+
+        sort_column = settings.get("sort_column")
+
+        if (
+            isinstance(sort_column, int)
+            and 0 <= sort_column < self.game_table_model.columnCount()
+        ):
+            self.header_sort_column = sort_column
+
+            if settings.get("sort_order") == "descending":
+                self.header_sort_order = Qt.SortOrder.DescendingOrder
+            else:
+                self.header_sort_order = Qt.SortOrder.AscendingOrder
+
+            header = self.table.horizontalHeader()
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(
+                self.header_sort_column,
+                self.header_sort_order,
+            )
+
+    def _save_library_view(self):
+        set_library_view_settings(
+            {
+                "status": self.status_filter.currentText(),
+                "type": self.type_filter.currentText(),
+                "hltb_metric": self.hltb_metric_filter.currentText(),
+                "hltb_min": self.hltb_min_filter.value(),
+                "hltb_max": self.hltb_max_filter.value(),
+                "sort_column": self.header_sort_column,
+                "sort_order": (
+                    "descending"
+                    if self.header_sort_order == Qt.SortOrder.DescendingOrder
+                    else "ascending"
+                ),
+            }
+        )
+
+    def _library_filter_changed(self):
+        self.apply_filters()
+        self._save_library_view()
+
     def hltb_min_changed(self, min_hours):
         max_hours = self.hltb_max_filter.value()
 
@@ -346,6 +420,7 @@ class LibraryTab(QWidget):
             self.hltb_max_filter.setValue(min_hours)
 
         self.apply_filters()
+        self._save_library_view()
 
     def hltb_max_changed(self, max_hours):
         min_hours = self.hltb_min_filter.value()
@@ -354,6 +429,7 @@ class LibraryTab(QWidget):
             self.hltb_min_filter.setValue(max_hours)
 
         self.apply_filters()
+        self._save_library_view()
 
     def apply_filters(self):
         filtered_games = self.games
@@ -906,6 +982,7 @@ class LibraryTab(QWidget):
         )
 
         self.apply_filters()
+        self._save_library_view()
 
     def sort_filter_changed(self):
         self.header_sort_column = None

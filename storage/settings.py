@@ -49,3 +49,40 @@ def set_steam_id(steam_id):
     settings["steam_id"] = steam_id
 
     save_settings(settings)
+
+def get_library_view_settings():
+    if not SETTINGS_FILE.exists():
+        return {}
+
+    try:
+        settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    library_view = settings.get("library_view")
+
+    if not isinstance(library_view, dict):
+        return {}
+
+    return library_view
+
+
+def set_library_view_settings(library_view):
+    settings = {}
+
+    if SETTINGS_FILE.exists():
+        try:
+            settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            settings = {}
+
+    if not isinstance(settings, dict):
+        settings = {}
+
+    settings["library_view"] = library_view
+
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_FILE.write_text(
+        json.dumps(settings, indent=2),
+        encoding="utf-8",
+    )
