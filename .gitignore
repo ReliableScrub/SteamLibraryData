@@ -181,10 +181,10 @@ cython_debug/
 
 # Local user data
 data/
-/steam_backlog.db
-/steam_backlog.db-journal
-/steam_backlog.db-shm
-/steam_backlog.db-wal
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
 /settings.json
 /images/
 
@@ -198,4 +198,3 @@ data/
 # Development-only files
 migrate_json_to_sqlite.py
 /reminders
-/tests
