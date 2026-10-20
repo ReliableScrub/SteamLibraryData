@@ -6,7 +6,9 @@ from recommendations.feedback import (
     achievement_engagement,
     achievement_progress,
     combine_implicit_feedback,
+    combine_manual_and_implicit_feedback,
     explicit_rating_feedback,
+    final_feedback,
     hltb_engagement,
     implicit_feedback,
     manual_status_feedback,
@@ -333,3 +335,73 @@ def test_meaningful_play_produces_implicit_feedback():
     assert feedback.score > 0
     assert feedback.confidence > 0
     assert feedback.confidence <= 0.60
+
+
+def test_explicit_rating_overrides_other_feedback():
+    feedback = final_feedback(
+        rating=1,
+        manual_status="Completed",
+        playtime_minutes=100 * 60,
+        hltb_main=10,
+        hltb_main_extra=20,
+        hltb_completionist=30,
+        hltb_all_styles=15,
+        achievement_total=100,
+        achievements_unlocked=100,
+    )
+
+    assert feedback == FeedbackSignal(
+        score=-1.0,
+        confidence=1.0,
+    )
+
+
+def test_manual_feedback_is_used_without_implicit_feedback():
+    feedback = combine_manual_and_implicit_feedback(
+        FeedbackSignal(
+            score=-0.45,
+            confidence=0.35,
+        ),
+        None,
+    )
+
+    assert feedback == FeedbackSignal(
+        score=-0.45,
+        confidence=0.35,
+    )
+
+
+def test_manual_and_implicit_feedback_are_combined():
+    manual = FeedbackSignal(
+        score=-0.45,
+        confidence=0.35,
+    )
+
+    implicit = FeedbackSignal(
+        score=0.55,
+        confidence=0.50,
+    )
+
+    feedback = combine_manual_and_implicit_feedback(
+        manual,
+        implicit,
+    )
+
+    assert -0.45 < feedback.score < 0.55
+    assert feedback.confidence == pytest.approx(0.50)
+
+
+def test_game_without_feedback_returns_none():
+    feedback = final_feedback(
+        rating=None,
+        manual_status=None,
+        playtime_minutes=0,
+        hltb_main=None,
+        hltb_main_extra=None,
+        hltb_completionist=None,
+        hltb_all_styles=None,
+        achievement_total=None,
+        achievements_unlocked=None,
+    )
+
+    assert feedback is None
