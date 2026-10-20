@@ -42,7 +42,7 @@ def build_content_features(games):
             # Convert each weight into a 0-1 strength relative to the
             # strongest tag on that particular game.
             if max_tag_weight > 0:
-                tag_strength = weight / max_tag_weight
+                tag_strength = math.sqrt(weight / max_tag_weight)
             else:
                 tag_strength = 0
 
@@ -65,3 +65,15 @@ def normalize_vector(vector):
     # Scale the whole vector to length 1.
     # This makes later cosine comparisons straightforward.
     return {feature: value / magnitude for feature, value in vector.items()}
+
+
+def cosine_similarity(vector_a, vector_b):
+    if not vector_a or not vector_b:
+        return 0.0
+
+    if len(vector_a) > len(vector_b):
+        vector_a, vector_b = vector_b, vector_a
+
+    return sum(
+        value * vector_b.get(feature, 0.0) for feature, value in vector_a.items()
+    )
