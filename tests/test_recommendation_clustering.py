@@ -2,10 +2,11 @@ from recommendations.baseline import (
     score_unplayed_games as score_baseline_games,
 )
 from recommendations.clustering import (
-    score_unplayed_games as score_cluster_games,
+    choose_cluster_count,
+    train_taste_clusters,
 )
 from recommendations.clustering import (
-    train_taste_clusters,
+    score_unplayed_games as score_cluster_games,
 )
 from recommendations.data import RecommendationGameData
 from recommendations.features import build_content_features
@@ -111,6 +112,27 @@ def build_games():
     ]
 
 
+def build_positive_games(count):
+    games = []
+
+    for index in range(count):
+        games.append(
+            make_game(
+                index + 1,
+                f"Positive Game {index + 1}",
+                playtime_minutes=600,
+                rating=5,
+                genres=["RPG"],
+                tags={
+                    "RPG": 100,
+                    f"Feature {index % 5}": 80,
+                },
+            )
+        )
+
+    return games
+
+
 def build_baseline_scores(
     games,
     vectors,
@@ -127,9 +149,35 @@ def build_baseline_scores(
     )
 
 
+def test_choose_cluster_count_uses_baseline_for_tiny_history():
+    assert choose_cluster_count(0) is None
+    assert choose_cluster_count(5) is None
+    assert choose_cluster_count(14) is None
+
+
+def test_choose_cluster_count_uses_two_clusters_for_15_to_19():
+    assert choose_cluster_count(15) == 2
+    assert choose_cluster_count(19) == 2
+
+
+def test_choose_cluster_count_uses_three_clusters_for_20_to_29():
+    assert choose_cluster_count(20) == 3
+    assert choose_cluster_count(29) == 3
+
+
+def test_choose_cluster_count_uses_four_clusters_for_30_to_49():
+    assert choose_cluster_count(30) == 4
+    assert choose_cluster_count(49) == 4
+
+
+def test_choose_cluster_count_uses_five_clusters_for_50_or_more():
+    assert choose_cluster_count(50) == 5
+    assert choose_cluster_count(100) == 5
+    assert choose_cluster_count(500) == 5
+
+
 def test_kmeans_builds_requested_clusters():
     games = build_games()
-
     vectors = build_content_features(games)
 
     model = train_taste_clusters(
@@ -146,7 +194,6 @@ def test_kmeans_builds_requested_clusters():
 
 def test_kmeans_centers_are_nonempty():
     games = build_games()
-
     vectors = build_content_features(games)
 
     model = train_taste_clusters(
@@ -162,7 +209,6 @@ def test_kmeans_centers_are_nonempty():
 
 def test_kmeans_scores_only_unplayed_games():
     games = build_games()
-
     vectors = build_content_features(games)
 
     baseline_scores = build_baseline_scores(
@@ -188,7 +234,6 @@ def test_kmeans_scores_only_unplayed_games():
 
 def test_kmeans_candidate_has_cluster_match():
     games = build_games()
-
     vectors = build_content_features(games)
 
     baseline_scores = build_baseline_scores(
@@ -216,7 +261,6 @@ def test_kmeans_candidate_has_cluster_match():
 
 def test_kmeans_uses_nearest_positive_component():
     games = build_games()
-
     vectors = build_content_features(games)
 
     baseline_scores = build_baseline_scores(
@@ -240,20 +284,51 @@ def test_kmeans_uses_nearest_positive_component():
     )
 
     for score in scores:
-        expected = baseline_by_id[score.app_id].nearest_positive_adjusted_similarity
+        baseline_score = baseline_by_id[score.app_id]
 
-        assert score.nearest_positive_similarity == expected
+        assert (
+            score.nearest_positive_similarity
+            == baseline_score.nearest_positive_adjusted_similarity
+        )
+
+        assert score.nearest_positive_app_id == baseline_score.nearest_positive_app_id
 
 
 def test_kmeans_returns_none_when_cluster_count_is_too_large():
     games = build_games()
-
     vectors = build_content_features(games)
 
     model = train_taste_clusters(
         games,
         vectors,
         cluster_count=10,
+    )
+
+    assert model is None
+
+
+def test_kmeans_automatically_selects_cluster_count():
+    games = build_positive_games(20)
+    vectors = build_content_features(games)
+
+    model = train_taste_clusters(
+        games,
+        vectors,
+    )
+
+    assert model is not None
+    assert len(model.cluster_centers) == 3
+    assert len(model.cluster_sizes) == 3
+    assert sum(model.cluster_sizes) == 20
+
+
+def test_kmeans_automatic_mode_returns_none_for_tiny_history():
+    games = build_positive_games(14)
+    vectors = build_content_features(games)
+
+    model = train_taste_clusters(
+        games,
+        vectors,
     )
 
     assert model is None

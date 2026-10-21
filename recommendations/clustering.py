@@ -15,6 +15,23 @@ from recommendations.feedback import final_feedback
 
 DEFAULT_CLUSTER_COUNT = 5
 RANDOM_STATE = 42
+MIN_CLUSTERING_HISTORY = 15
+
+
+def choose_cluster_count(positive_count):
+    if positive_count < MIN_CLUSTERING_HISTORY:
+        return None
+
+    if positive_count < 20:
+        return 2
+
+    if positive_count < 30:
+        return 3
+
+    if positive_count < 50:
+        return 4
+
+    return 5
 
 
 @dataclass
@@ -33,6 +50,7 @@ class ClusterScore:
     cluster_index: int | None
 
     nearest_positive_similarity: float
+    nearest_positive_app_id: int | None
 
 
 def positive_feedback_weight(game):
@@ -57,10 +75,7 @@ def positive_feedback_weight(game):
     return feedback.score * feedback.confidence
 
 
-def center_to_dict(
-    vectorizer,
-    center,
-):
+def center_to_dict(vectorizer, center):
     feature_names = vectorizer.get_feature_names_out()
 
     return {
@@ -73,7 +88,7 @@ def center_to_dict(
 def train_taste_clusters(
     games,
     content_vectors,
-    cluster_count=DEFAULT_CLUSTER_COUNT,
+    cluster_count=None,
 ):
     positive_vectors = []
     sample_weights = []
@@ -93,9 +108,22 @@ def train_taste_clusters(
             continue
 
         positive_vectors.append(vector)
-
         sample_weights.append(weight)
 
+    # Production behavior:
+    # choose K automatically from the amount of qualified positive history.
+    #
+    # Audits/tests can still explicitly pass cluster_count to force a
+    # particular K value.
+    if cluster_count is None:
+        cluster_count = choose_cluster_count(len(positive_vectors))
+
+    # Too little qualified history for clustering.
+    if cluster_count is None:
+        return None
+
+    # Protect explicit audit/test requests from asking for more clusters
+    # than there are usable training games.
     if len(positive_vectors) < cluster_count:
         return None
 
@@ -192,6 +220,7 @@ def score_unplayed_games(
                 nearest_positive_similarity=(
                     baseline_score.nearest_positive_adjusted_similarity
                 ),
+                nearest_positive_app_id=baseline_score.nearest_positive_app_id,
             )
         )
 
