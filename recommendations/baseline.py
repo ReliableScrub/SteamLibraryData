@@ -6,11 +6,15 @@ from recommendations.feedback import final_feedback
 MIN_POSITIVE_REFERENCE_WEIGHT = 0.05
 FEATURE_SUPPORT_SATURATION = 10
 
+PROFILE_WEIGHT = 0.50
+NEAREST_POSITIVE_WEIGHT = 0.50
+
 
 @dataclass(frozen=True)
 class BaselineScore:
     app_id: int
 
+    recommendation_score: float
     profile_similarity: float
 
     nearest_positive_similarity: float
@@ -44,6 +48,16 @@ def support_adjusted_similarity(
     )
 
     return similarity * support
+
+
+def combine_baseline_score(
+    profile_similarity,
+    nearest_positive_adjusted_similarity,
+):
+    return (
+        PROFILE_WEIGHT * profile_similarity
+        + NEAREST_POSITIVE_WEIGHT * nearest_positive_adjusted_similarity
+    )
 
 
 def score_unplayed_games(
@@ -173,9 +187,15 @@ def score_unplayed_games(
                 nearest_feedback_confidence = feedback_confidence
                 nearest_feedback_weight = feedback_weight
 
+        recommendation_score = combine_baseline_score(
+            profile_similarity,
+            nearest_positive_adjusted_similarity,
+        )
+
         scores.append(
             BaselineScore(
                 app_id=game.app_id,
+                recommendation_score=recommendation_score,
                 profile_similarity=profile_similarity,
                 nearest_positive_similarity=nearest_positive_similarity,
                 nearest_positive_adjusted_similarity=nearest_positive_adjusted_similarity,
