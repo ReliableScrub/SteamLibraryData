@@ -1,22 +1,50 @@
 from dataclasses import dataclass
 
 from recommendations.features import cosine_similarity
-from recommendations.feedback import final_feedback
+from recommendations.neighbors import (
+    FEATURE_SUPPORT_SATURATION as NEIGHBOR_FEATURE_SUPPORT_SATURATION,
+)
+from recommendations.neighbors import (
+    MIN_POSITIVE_NEIGHBOR_WEIGHT,
+    PositiveNeighbor,
+)
+from recommendations.neighbors import (
+    score_unplayed_games as score_neighbor_games,
+)
+from recommendations.neighbors import (
+    shared_feature_count as neighbor_shared_feature_count,
+)
+from recommendations.neighbors import (
+    support_adjusted_similarity as neighbor_support_adjusted_similarity,
+)
 
-MIN_POSITIVE_REFERENCE_WEIGHT = 0.05
-FEATURE_SUPPORT_SATURATION = 10
+# Compatibility name used by existing persistence/tests/audits.
+MIN_POSITIVE_REFERENCE_WEIGHT = MIN_POSITIVE_NEIGHBOR_WEIGHT
+
+# Compatibility name used by existing baseline tests/audits.
+FEATURE_SUPPORT_SATURATION = NEIGHBOR_FEATURE_SUPPORT_SATURATION
 
 PROFILE_WEIGHT = 0.50
+
+# Keep the old constant name available while its meaning becomes the
+# positive-neighborhood half of the score.
 NEAREST_POSITIVE_WEIGHT = 0.50
+NEIGHBOR_WEIGHT = NEAREST_POSITIVE_WEIGHT
+
+PRODUCTION_NEIGHBOR_COUNT = 3
 
 
 @dataclass(frozen=True)
 class BaselineScore:
     app_id: int
-
     recommendation_score: float
+
     profile_similarity: float
 
+    # Compatibility fields.
+    #
+    # These now describe the strongest individual member of the K=3
+    # neighborhood. They no longer determine the recommendation score.
     nearest_positive_similarity: float
     nearest_positive_adjusted_similarity: float
     nearest_positive_shared_features: int
@@ -26,37 +54,34 @@ class BaselineScore:
     nearest_positive_feedback_confidence: float
     nearest_positive_feedback_weight: float
 
+    # New production signal.
+    neighborhood_similarity: float = 0.0
+    neighbors: tuple[PositiveNeighbor, ...] = ()
 
-def shared_feature_count(vector_a, vector_b):
-    features_a = {feature for feature, value in vector_a.items() if value != 0}
 
-    features_b = {feature for feature, value in vector_b.items() if value != 0}
-
-    return len(features_a & features_b)
+def shared_feature_count(
+    vector_a,
+    vector_b,
+):
+    """
+    Compatibility wrapper for existing callers.
+    """
+    return neighbor_shared_feature_count(
+        vector_a,
+        vector_b,
+    )
 
 
 def support_adjusted_similarity(
     similarity,
     shared_count,
 ):
-    if similarity <= 0 or shared_count <= 0:
-        return 0.0
-
-    support = min(
-        shared_count / FEATURE_SUPPORT_SATURATION,
-        1.0,
-    )
-
-    return similarity * support
-
-
-def combine_baseline_score(
-    profile_similarity,
-    nearest_positive_adjusted_similarity,
-):
-    return (
-        PROFILE_WEIGHT * profile_similarity
-        + NEAREST_POSITIVE_WEIGHT * nearest_positive_adjusted_similarity
+    """
+    Compatibility wrapper for existing callers.
+    """
+    return neighbor_support_adjusted_similarity(
+        similarity,
+        shared_count,
     )
 
 
@@ -65,50 +90,22 @@ def score_unplayed_games(
     content_vectors,
     profile,
 ):
-    positive_references = []
+    """
+    Production baseline:
 
-    for game in games:
-        # A nearest-positive reference must be a game the user actually played.
-        if game.playtime_minutes <= 0:
-            continue
+        50% preference-profile similarity
+        50% K=3 feedback-weighted positive-neighborhood similarity
 
-        vector = content_vectors.get(game.app_id)
+    The nearest-positive fields remain temporarily so older code can
+    continue to inspect the strongest individual neighbor.
+    """
+    neighborhood_scores = score_neighbor_games(
+        games,
+        content_vectors,
+        neighbor_count=PRODUCTION_NEIGHBOR_COUNT,
+    )
 
-        if not vector:
-            continue
-
-        feedback = final_feedback(
-            rating=game.rating,
-            manual_status=game.manual_status,
-            playtime_minutes=game.playtime_minutes,
-            hltb_main=game.hltb_main,
-            hltb_main_extra=game.hltb_main_extra,
-            hltb_completionist=game.hltb_completionist,
-            hltb_all_styles=game.hltb_all_styles,
-            achievement_total=game.achievement_total,
-            achievements_unlocked=game.achievements_unlocked,
-        )
-
-        if feedback is None:
-            continue
-
-        if feedback.score <= 0:
-            continue
-
-        feedback_weight = feedback.score * feedback.confidence
-
-        if feedback_weight < MIN_POSITIVE_REFERENCE_WEIGHT:
-            continue
-
-        positive_references.append(
-            (
-                game.app_id,
-                vector,
-                feedback.score,
-                feedback.confidence,
-                feedback_weight,
-            )
-        )
+    neighborhood_by_id = {score.app_id: score for score in neighborhood_scores}
 
     scores = []
 
@@ -126,70 +123,45 @@ def score_unplayed_games(
             candidate_vector,
         )
 
-        nearest_positive_similarity = 0.0
-        nearest_positive_adjusted_similarity = 0.0
-        nearest_positive_shared_features = 0
-        nearest_positive_app_id = None
+        neighborhood_score = neighborhood_by_id.get(game.app_id)
 
-        nearest_feedback_score = 0.0
-        nearest_feedback_confidence = 0.0
-        nearest_feedback_weight = 0.0
+        if neighborhood_score is None:
+            neighborhood_similarity = 0.0
+            neighbors = ()
+        else:
+            neighborhood_similarity = neighborhood_score.feedback_weighted_mean
 
-        for (
-            reference_app_id,
-            reference_vector,
-            feedback_score,
-            feedback_confidence,
-            feedback_weight,
-        ) in positive_references:
-            similarity = cosine_similarity(
-                candidate_vector,
-                reference_vector,
-            )
+            neighbors = neighborhood_score.neighbors
 
-            shared_count = shared_feature_count(
-                candidate_vector,
-                reference_vector,
-            )
+        if neighbors:
+            nearest = neighbors[0]
 
-            adjusted_similarity = support_adjusted_similarity(
-                similarity,
-                shared_count,
-            )
+            nearest_positive_similarity = nearest.similarity
 
-            if adjusted_similarity <= 0:
-                continue
+            nearest_positive_adjusted_similarity = nearest.adjusted_similarity
 
-            better_match = adjusted_similarity > nearest_positive_adjusted_similarity
+            nearest_positive_shared_features = nearest.shared_features
 
-            same_adjusted_but_better_raw = (
-                adjusted_similarity == nearest_positive_adjusted_similarity
-                and similarity > nearest_positive_similarity
-            )
+            nearest_positive_app_id = nearest.app_id
 
-            same_similarity_but_stronger_feedback = (
-                adjusted_similarity == nearest_positive_adjusted_similarity
-                and similarity == nearest_positive_similarity
-                and feedback_weight > nearest_feedback_weight
-            )
+            nearest_feedback_score = nearest.feedback_score
 
-            if (
-                better_match
-                or same_adjusted_but_better_raw
-                or same_similarity_but_stronger_feedback
-            ):
-                nearest_positive_similarity = similarity
-                nearest_positive_adjusted_similarity = adjusted_similarity
-                nearest_positive_shared_features = shared_count
-                nearest_positive_app_id = reference_app_id
+            nearest_feedback_confidence = nearest.feedback_confidence
 
-                nearest_feedback_score = feedback_score
-                nearest_feedback_confidence = feedback_confidence
-                nearest_feedback_weight = feedback_weight
+            nearest_feedback_weight = nearest.feedback_weight
+        else:
+            nearest_positive_similarity = 0.0
+            nearest_positive_adjusted_similarity = 0.0
+            nearest_positive_shared_features = 0
+            nearest_positive_app_id = None
 
-        recommendation_score = combine_baseline_score(
-            profile_similarity,
-            nearest_positive_adjusted_similarity,
+            nearest_feedback_score = 0.0
+            nearest_feedback_confidence = 0.0
+            nearest_feedback_weight = 0.0
+
+        recommendation_score = (
+            PROFILE_WEIGHT * profile_similarity
+            + NEIGHBOR_WEIGHT * neighborhood_similarity
         )
 
         scores.append(
@@ -204,6 +176,8 @@ def score_unplayed_games(
                 nearest_positive_feedback_score=nearest_feedback_score,
                 nearest_positive_feedback_confidence=nearest_feedback_confidence,
                 nearest_positive_feedback_weight=nearest_feedback_weight,
+                neighborhood_similarity=neighborhood_similarity,
+                neighbors=neighbors,
             )
         )
 

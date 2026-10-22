@@ -3,10 +3,7 @@ from dataclasses import dataclass
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction import DictVectorizer
 
-from recommendations.baseline import (
-    MIN_POSITIVE_REFERENCE_WEIGHT,
-    combine_baseline_score,
-)
+from recommendations.baseline import BaselineScore
 from recommendations.features import (
     cosine_similarity,
     normalize_vector,
@@ -16,9 +13,37 @@ from recommendations.feedback import final_feedback
 DEFAULT_CLUSTER_COUNT = 5
 RANDOM_STATE = 42
 MIN_CLUSTERING_HISTORY = 15
+MIN_POSITIVE_TRAINING_WEIGHT = 0.05
+
+CLUSTER_WEIGHT = 0.50
+NEIGHBOR_WEIGHT = 0.50
 
 
-def choose_cluster_count(positive_count):
+@dataclass(frozen=True)
+class TasteClusterModel:
+    vectorizer: DictVectorizer
+    cluster_centers: list[dict[str, float]]
+    cluster_sizes: list[int]
+
+
+@dataclass(frozen=True)
+class ClusterScore:
+    app_id: int
+    recommendation_score: float
+    cluster_similarity: float
+    cluster_index: int
+
+    # Compatibility fields used by current audits/explanation code.
+    nearest_positive_similarity: float
+    nearest_positive_app_id: int | None
+
+    # New production history signal.
+    neighborhood_similarity: float = 0.0
+
+
+def choose_cluster_count(
+    positive_count,
+):
     if positive_count < MIN_CLUSTERING_HISTORY:
         return None
 
@@ -31,29 +56,16 @@ def choose_cluster_count(positive_count):
     if positive_count < 50:
         return 4
 
-    return 5
-
-
-@dataclass
-class TasteClusterModel:
-    vectorizer: DictVectorizer
-    cluster_centers: list[dict[str, float]]
-    cluster_sizes: list[int]
-
-
-@dataclass(frozen=True)
-class ClusterScore:
-    app_id: int
-    recommendation_score: float
-
-    cluster_similarity: float
-    cluster_index: int | None
-
-    nearest_positive_similarity: float
-    nearest_positive_app_id: int | None
+    return DEFAULT_CLUSTER_COUNT
 
 
 def positive_feedback_weight(game):
+    """
+    Return the positive feedback weight for a played game.
+
+    This function name is intentionally preserved because persistence and
+    existing audits already import it.
+    """
     feedback = final_feedback(
         rating=game.rating,
         manual_status=game.manual_status,
@@ -75,23 +87,13 @@ def positive_feedback_weight(game):
     return feedback.score * feedback.confidence
 
 
-def center_to_dict(vectorizer, center):
-    feature_names = vectorizer.get_feature_names_out()
-
-    return {
-        feature_names[index]: float(value)
-        for index, value in enumerate(center)
-        if value != 0
-    }
-
-
 def train_taste_clusters(
     games,
     content_vectors,
     cluster_count=None,
 ):
-    positive_vectors = []
-    sample_weights = []
+    training_vectors = []
+    training_weights = []
 
     for game in games:
         if game.playtime_minutes <= 0:
@@ -104,65 +106,87 @@ def train_taste_clusters(
 
         weight = positive_feedback_weight(game)
 
-        if weight < MIN_POSITIVE_REFERENCE_WEIGHT:
+        if weight < MIN_POSITIVE_TRAINING_WEIGHT:
             continue
 
-        positive_vectors.append(vector)
-        sample_weights.append(weight)
+        training_vectors.append(vector)
 
-    # Production behavior:
-    # choose K automatically from the amount of qualified positive history.
-    #
-    # Audits/tests can still explicitly pass cluster_count to force a
-    # particular K value.
+        training_weights.append(weight)
+
+    positive_count = len(training_vectors)
+
     if cluster_count is None:
-        cluster_count = choose_cluster_count(len(positive_vectors))
+        cluster_count = choose_cluster_count(positive_count)
 
-    # Too little qualified history for clustering.
     if cluster_count is None:
         return None
 
-    # Protect explicit audit/test requests from asking for more clusters
-    # than there are usable training games.
-    if len(positive_vectors) < cluster_count:
+    if positive_count < cluster_count:
         return None
 
-    vectorizer = DictVectorizer(
-        sparse=False,
-    )
+    vectorizer = DictVectorizer(sparse=False)
 
-    matrix = vectorizer.fit_transform(positive_vectors)
+    matrix = vectorizer.fit_transform(training_vectors)
 
     model = KMeans(
         n_clusters=cluster_count,
-        random_state=RANDOM_STATE,
         n_init=10,
+        random_state=RANDOM_STATE,
     )
 
     model.fit(
         matrix,
-        sample_weight=sample_weights,
+        sample_weight=training_weights,
     )
+
+    feature_names = vectorizer.get_feature_names_out()
+
+    cluster_centers = []
+
+    for center in model.cluster_centers_:
+        center_vector = {
+            feature: float(value)
+            for feature, value in zip(
+                feature_names,
+                center,
+            )
+            if value != 0
+        }
+
+        cluster_centers.append(normalize_vector(center_vector))
 
     cluster_sizes = [0 for _ in range(cluster_count)]
 
     for label in model.labels_:
         cluster_sizes[int(label)] += 1
 
-    cluster_centers = []
-
-    for center in model.cluster_centers_:
-        center_dict = center_to_dict(
-            vectorizer,
-            center,
-        )
-
-        cluster_centers.append(normalize_vector(center_dict))
-
     return TasteClusterModel(
         vectorizer=vectorizer,
         cluster_centers=cluster_centers,
         cluster_sizes=cluster_sizes,
+    )
+
+
+def best_cluster_match(
+    candidate_vector,
+    cluster_model,
+):
+    best_index = 0
+    best_similarity = 0.0
+
+    for index, center in enumerate(cluster_model.cluster_centers):
+        similarity = cosine_similarity(
+            candidate_vector,
+            center,
+        )
+
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_index = index
+
+    return (
+        best_index,
+        best_similarity,
     )
 
 
@@ -172,9 +196,12 @@ def score_unplayed_games(
     cluster_model,
     baseline_scores,
 ):
-    if cluster_model is None:
-        return []
+    """
+    Production K-Means score:
 
+        50% closest taste-cluster similarity
+        50% K=3 feedback-weighted neighborhood similarity
+    """
     baseline_by_id = {score.app_id: score for score in baseline_scores}
 
     scores = []
@@ -193,34 +220,34 @@ def score_unplayed_games(
         if baseline_score is None:
             continue
 
-        best_similarity = 0.0
-        best_cluster_index = None
+        (
+            cluster_index,
+            cluster_similarity,
+        ) = best_cluster_match(
+            candidate_vector,
+            cluster_model,
+        )
 
-        for cluster_index, center in enumerate(cluster_model.cluster_centers):
-            similarity = cosine_similarity(
-                candidate_vector,
-                center,
-            )
+        neighborhood_similarity = baseline_score.neighborhood_similarity
 
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_cluster_index = cluster_index
-
-        recommendation_score = combine_baseline_score(
-            best_similarity,
-            baseline_score.nearest_positive_adjusted_similarity,
+        recommendation_score = (
+            CLUSTER_WEIGHT * cluster_similarity
+            + NEIGHBOR_WEIGHT * neighborhood_similarity
         )
 
         scores.append(
             ClusterScore(
                 app_id=game.app_id,
                 recommendation_score=recommendation_score,
-                cluster_similarity=best_similarity,
-                cluster_index=best_cluster_index,
+                cluster_similarity=cluster_similarity,
+                cluster_index=cluster_index,
+                # Compatibility values only. The final score no longer
+                # uses a single nearest-positive game.
                 nearest_positive_similarity=(
                     baseline_score.nearest_positive_adjusted_similarity
                 ),
-                nearest_positive_app_id=baseline_score.nearest_positive_app_id,
+                nearest_positive_app_id=(baseline_score.nearest_positive_app_id),
+                neighborhood_similarity=neighborhood_similarity,
             )
         )
 

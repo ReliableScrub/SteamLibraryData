@@ -1,6 +1,12 @@
 import math
 from collections import Counter
 
+EXCLUDED_RECOMMENDATION_GENRES = {
+    "Free To Play",
+}
+
+EXCLUDED_RECOMMENDATION_TAGS = set()
+
 
 def build_content_features(games):
     document_frequency = Counter()
@@ -27,6 +33,8 @@ def build_content_features(games):
         vector = {}
 
         for genre in game.genres:
+            if genre in EXCLUDED_RECOMMENDATION_GENRES:
+                continue
             feature = f"genre:{genre}"
             # Inverse document frequency. Smaller usages, more importance
             idf = math.log((game_count + 1) / (document_frequency[feature] + 1)) + 1
@@ -36,6 +44,9 @@ def build_content_features(games):
         max_tag_weight = max(game.tags.values(), default=0)
 
         for tag, weight in game.tags.items():
+            if tag in EXCLUDED_RECOMMENDATION_TAGS:
+                continue
+
             feature = f"tag:{tag}"
 
             # SteamSpy gives tags different weights.

@@ -1,7 +1,7 @@
 import time
 
-from recommendations.baseline import MIN_POSITIVE_REFERENCE_WEIGHT
 from recommendations.clustering import positive_feedback_weight
+from recommendations.neighbors import MIN_POSITIVE_NEIGHBOR_WEIGHT
 from storage.database import get_connection
 
 MODEL_VERSION = 1
@@ -20,7 +20,7 @@ def count_training_games(games):
 
         weight = positive_feedback_weight(game)
 
-        if weight < MIN_POSITIVE_REFERENCE_WEIGHT:
+        if weight < MIN_POSITIVE_NEIGHBOR_WEIGHT:
             continue
 
         count += 1
