@@ -1,11 +1,12 @@
+import json
 import time
 
 from recommendations.clustering import positive_feedback_weight
 from recommendations.neighbors import MIN_POSITIVE_NEIGHBOR_WEIGHT
 from storage.database import get_connection
 
-MODEL_VERSION = 1
-FEATURE_VERSION = 1
+MODEL_VERSION = 2
+FEATURE_VERSION = 2
 
 
 def count_training_games(games):
@@ -38,6 +39,57 @@ def count_implicit_games(games):
     )
 
 
+def serialize_feature(feature):
+    return {
+        "name": feature.name,
+        "contribution": feature.contribution,
+        "sources": list(feature.sources),
+    }
+
+
+def serialize_supporting_game(
+    supporting_game,
+):
+    return {
+        "app_id": supporting_game.app_id,
+        "name": supporting_game.name,
+        "raw_similarity": supporting_game.raw_similarity,
+        "adjusted_similarity": supporting_game.adjusted_similarity,
+        "shared_feature_count": supporting_game.shared_feature_count,
+        "evidence": supporting_game.evidence,
+        "feedback_weight": supporting_game.feedback_weight,
+        "playtime_minutes": supporting_game.playtime_minutes,
+        "shared_features": [
+            serialize_feature(feature) for feature in supporting_game.shared_features
+        ],
+    }
+
+
+def serialize_explanation(
+    explanation,
+):
+    if explanation is None:
+        return None
+
+    data = {
+        "taste_source": explanation.taste_source,
+        "taste_features": [
+            serialize_feature(feature) for feature in explanation.taste_features
+        ],
+        "supporting_games": [
+            serialize_supporting_game(supporting_game)
+            for supporting_game in explanation.supporting_games
+        ],
+    }
+
+    return json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def save_recommendation_build(
     build,
     games,
@@ -50,19 +102,28 @@ def save_recommendation_build(
 
     implicit_game_count = count_implicit_games(games)
 
+    explanations = (
+        getattr(
+            build,
+            "explanations",
+            {},
+        )
+        or {}
+    )
+
     recommendation_rows = [
         (
             score.app_id,
             score.recommendation_score,
             None,
-            None,
+            serialize_explanation(explanations.get(score.app_id)),
             generated_at,
         )
         for score in build.scores
     ]
 
     with get_connection() as connection:
-        # Replace the old build atomically.
+        # Replace the previous disposable recommendation build atomically.
         connection.execute("DELETE FROM game_recommendations")
 
         connection.execute("DELETE FROM recommendation_state")

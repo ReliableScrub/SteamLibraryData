@@ -1,8 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from recommendations.baseline import (
-    BaselineScore,
-)
+from recommendations.baseline import BaselineScore
 from recommendations.baseline import (
     score_unplayed_games as score_baseline_games,
 )
@@ -15,6 +13,10 @@ from recommendations.clustering import (
 )
 from recommendations.data import load_recommendation_games
 from recommendations.diversity import rerank_mmr
+from recommendations.explanations import (
+    RecommendationExplanation,
+    build_recommendation_explanations,
+)
 from recommendations.features import build_content_features
 from recommendations.persistence import save_recommendation_build
 from recommendations.profile import build_preference_profile
@@ -30,6 +32,9 @@ class RecommendationBuild:
     cluster_count: int | None
     scores: list[BaselineScore | ClusterScore]
     top_picks: list[BaselineScore | ClusterScore]
+
+    # Keyed by recommended game's App ID.
+    explanations: dict[int, RecommendationExplanation] = field(default_factory=dict)
 
 
 def rank_scores(scores):
@@ -79,6 +84,16 @@ def build_recommendations(games):
 
         scores = rank_scores(cluster_scores)
 
+    explanations = build_recommendation_explanations(
+        games=games,
+        content_vectors=content_vectors,
+        profile=profile,
+        baseline_scores=baseline_scores,
+        recommendation_scores=scores,
+        method=method,
+        cluster_model=cluster_model,
+    )
+
     top_picks = rerank_mmr(
         scores,
         content_vectors,
@@ -93,6 +108,7 @@ def build_recommendations(games):
         cluster_count=cluster_count,
         scores=scores,
         top_picks=top_picks,
+        explanations=explanations,
     )
 
 
