@@ -36,6 +36,7 @@ from storage.settings import (
     set_steam_id as save_steam_id,
 )
 from ui.library_tab import LibraryTab
+from ui.recommendations_tab import RecommendationsTab
 from ui.settings_tab import SettingsTab
 from ui.update_controller import UpdateController
 from ui.updates_tab import DataUpdatesTab
@@ -170,17 +171,14 @@ class MainWindow(QMainWindow):
     def _create_tabs(self):
         self.tabs = QTabWidget()
         self.library_tab = LibraryTab(self.games, self)
+        self.recommendations_tab = RecommendationsTab(self.games, self)
         self.updates_tab = DataUpdatesTab(self)
-
-        self.settings_tab = SettingsTab(
-            self.steam_id,
-            bool(self.steam_api_key),
-            self,
-        )
+        self.settings_tab = SettingsTab(self.steam_id, bool(self.steam_api_key), self)
 
         self.contact_tab = self._create_contact_tab()
 
         self.tabs.addTab(self.library_tab, "Library")
+        self.tabs.addTab(self.recommendations_tab, "Recommendations")
         self.tabs.addTab(self.updates_tab, "Data Updates")
         self.tabs.addTab(self.settings_tab, "Settings")
         self.tabs.addTab(self.contact_tab, "Contact")
@@ -253,6 +251,7 @@ class MainWindow(QMainWindow):
     def _games_changed(self, games):
         self.games = games
         self.library_tab.set_games(games)
+        self.recommendations_tab.set_games(games)
 
     def _show_update_error(self, title, message):
         QMessageBox.warning(

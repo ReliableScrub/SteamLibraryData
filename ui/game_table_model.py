@@ -10,7 +10,7 @@ class GameTableModel(QAbstractTableModel):
         "Status",
         "Steam Playtime",
         "Last Played",
-        "Recent",
+        "Rating",
         "HLTB Time",
         "Achievements",
         "Steam Type",
@@ -20,6 +20,8 @@ class GameTableModel(QAbstractTableModel):
         super().__init__(parent)
 
         self.games = games or []
+        self.steam_type_resolver = None
+        self.ratings = {}
         self.hltb_metric = "Main Story"
 
     def rowCount(self, parent=None):
@@ -64,15 +66,12 @@ class GameTableModel(QAbstractTableModel):
             return "Never"
 
         if column == 4:
-            recent_minutes = game.playtime_2weeks_minutes or 0
+            rating = self.ratings.get(game.app_id)
 
-            if recent_minutes == 0:
+            if rating is None:
                 return "-"
 
-            if recent_minutes >= 60:
-                return f"{recent_minutes / 60:.1f} h"
-
-            return f"{recent_minutes} min"
+            return "★" * rating
 
         if column == 5:
             hltb_time = game.hltb_time(self.hltb_metric)
@@ -104,7 +103,24 @@ class GameTableModel(QAbstractTableModel):
                 "unknown": "Unknown",
             }
 
-            return steam_type_names.get(game.steam_type, "Unknown")
+            if self.steam_type_resolver is None:
+                return steam_type_names.get(
+                    game.steam_type,
+                    "Unknown",
+                )
+
+            inferred_type = self.steam_type_resolver(game)
+
+            if game.steam_type == "unknown" and inferred_type == "game":
+                return "Unknown (Game)"
+
+            if game.steam_type == "unknown" and inferred_type == "software":
+                return "Unknown (Software)"
+
+            return steam_type_names.get(
+                game.steam_type,
+                "Unknown",
+            )
 
         return None
 
@@ -148,3 +164,20 @@ class GameTableModel(QAbstractTableModel):
                 self.index(0, 5),
                 self.index(len(self.games) - 1, 5),
             )
+
+    def set_ratings(self, ratings):
+        self.ratings = dict(ratings or {})
+
+        if not self.games:
+            return
+
+        self.dataChanged.emit(
+            self.index(0, 4),
+            self.index(
+                len(self.games) - 1,
+                4,
+            ),
+        )
+
+    def set_steam_type_resolver(self, resolver):
+        self.steam_type_resolver = resolver

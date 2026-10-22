@@ -696,3 +696,17 @@ def clear_game_rating(app_id):
 def invalidate_recommendations(connection):
     connection.execute("DELETE FROM game_recommendations")
     connection.execute("DELETE FROM recommendation_state")
+
+
+def load_game_ratings():
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                app_id,
+                rating
+            FROM game_ratings
+            """
+        ).fetchall()
+
+    return {app_id: rating for app_id, rating in rows}

@@ -27,6 +27,7 @@ from game_updates import apply_hltb_candidate, mark_hltb_no_match
 from storage.database import (
     clear_game_rating,
     get_game_rating,
+    load_game_ratings,
     load_hltb_candidates,
     save_game,
     set_game_rating,
@@ -37,6 +38,7 @@ from storage.settings import (
     set_library_view_settings,
 )
 from ui.game_table_model import GameTableModel
+from ui.genre_tag_filter import GenreTagFilterWidget
 
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
@@ -119,11 +121,35 @@ class LibraryTab(QWidget):
         self.hltb_max_filter.setSpecialValueText("Max")
         self.hltb_max_filter.setSuffix(" h")
 
+        self.genre_tag_filter = GenreTagFilterWidget(self)
+
+        self.genre_tag_filter.set_available_from_games(self.games)
+
+        self.rating_filter = QComboBox()
+
+        self.rating_filter.addItems(
+            [
+                "All Ratings",
+                "Unrated",
+                "★",
+                "★★",
+                "★★★",
+                "★★★★",
+                "★★★★★",
+            ]
+        )
+
         self.pick_button = QPushButton("Pick Something For Me")
 
     def _create_table(self):
         self.table = QTableView()
         self.game_table_model = GameTableModel(self.filtered_games, self)
+
+        self.game_table_model.set_steam_type_resolver(
+            self.genre_tag_filter.inferred_steam_type
+        )
+
+        self.game_table_model.set_ratings(load_game_ratings())
 
         self.table.setModel(self.game_table_model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -236,6 +262,13 @@ class LibraryTab(QWidget):
         filter_row.addWidget(self.hltb_min_filter)
         filter_row.addWidget(QLabel("to"))
         filter_row.addWidget(self.hltb_max_filter)
+
+        filter_row.addSpacing(8)
+        filter_row.addWidget(self.genre_tag_filter)
+
+        filter_row.addWidget(QLabel("Rating:"))
+        filter_row.addWidget(self.rating_filter)
+
         filter_row.addStretch()
 
         self.details_panel = QWidget()
@@ -300,9 +333,9 @@ class LibraryTab(QWidget):
         self.status_filter.currentTextChanged.connect(self._library_filter_changed)
         self.type_filter.currentTextChanged.connect(self._library_filter_changed)
         self.hltb_metric_filter.currentTextChanged.connect(self._library_filter_changed)
+        self.genre_tag_filter.filters_changed.connect(self.apply_filters)
 
         self.hltb_min_filter.valueChanged.connect(self.hltb_min_changed)
-
         self.hltb_max_filter.valueChanged.connect(self.hltb_max_changed)
 
         self.pick_button.clicked.connect(self.pick_random_game)
@@ -316,9 +349,12 @@ class LibraryTab(QWidget):
         self.trailer_button.clicked.connect(self.open_selected_trailer)
         self.media_player.errorOccurred.connect(self.handle_video_error)
         self.splitter.splitterMoved.connect(self.update_media_sizes)
+        self.rating_filter.currentTextChanged.connect(self.apply_filters)
 
     def set_games(self, games):
         self.games = games
+
+        self.genre_tag_filter.set_available_from_games(games)
 
         self.refresh_data()
 
@@ -477,7 +513,9 @@ class LibraryTab(QWidget):
             steam_type = type_values[selected_type]
 
             filtered_games = [
-                game for game in filtered_games if game.steam_type == steam_type
+                game
+                for game in filtered_games
+                if self.genre_tag_filter.inferred_steam_type(game) == steam_type
             ]
 
         # 3. HLTB LENGTH FILTER
@@ -500,7 +538,34 @@ class LibraryTab(QWidget):
 
             filtered_games = ranged_games
 
-        # 4. SEARCH
+        # 4. GENRE / TAG FILTER
+        if self.genre_tag_filter.has_active_filters():
+            filtered_games = [
+                game
+                for game in filtered_games
+                if self.genre_tag_filter.matches_game(game)
+            ]
+        # 5. RATING FILTER
+        selected_rating = self.rating_filter.currentText()
+
+        if selected_rating != "All Ratings":
+            ratings = load_game_ratings()
+
+            if selected_rating == "Unrated":
+                filtered_games = [
+                    game for game in filtered_games if game.app_id not in ratings
+                ]
+
+            else:
+                rating_value = len(selected_rating)
+
+                filtered_games = [
+                    game
+                    for game in filtered_games
+                    if ratings.get(game.app_id) == rating_value
+                ]
+
+        # 6. SEARCH
         search_text = self.search_box.text().strip().lower()
 
         if search_text:
@@ -508,7 +573,7 @@ class LibraryTab(QWidget):
                 game for game in filtered_games if search_text in game.name.lower()
             ]
 
-        # 5. SORT
+        # 7. SORT
         if self.header_sort_column is not None:
             filtered_games = self.sort_games_by_column(filtered_games)
         else:
@@ -521,7 +586,7 @@ class LibraryTab(QWidget):
 
         self.game_table_model.set_games(filtered_games)
 
-        # 6. PUSH RESULT INTO TABLE
+        # 8. PUSH RESULT INTO TABLE
         self.filtered_games = filtered_games
 
         self.game_table_model.set_games(filtered_games)
@@ -605,7 +670,7 @@ class LibraryTab(QWidget):
 
         self.status_value.setText(status_text)
 
-        steam_type_text = game.steam_type.replace("_", " ").title()
+        steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
         self.game_details.setText(
             f"Last played: {last_played_text}\nLast 2 weeks: {recent_activity_text}\n\nSteam Playtime: {playtime_hours:.1f} hours\nSteam Type: {steam_type_text}\nHLTB ({hltb_metric}): {hltb_text}\nAchievements: {achievement_text}\n\nGenres: {genres}\n\nTags: {tags}"
@@ -632,28 +697,36 @@ class LibraryTab(QWidget):
             print(f"Image failed for {game.name}: {error}")
 
     def pick_random_game(self):
-        eligible_games = [
-            game for game in self.filtered_games if game.is_backlog_eligible()
-        ]
-
-        if not eligible_games:
+        if not self.filtered_games:
             QMessageBox.information(
                 self,
                 "No Games",
-                "No backlog-eligible games match the current filters",
+                "No games match the current filters.",
             )
+
             return
 
         game = random.choice(self.filtered_games)
-        hltb_time = self.current_hltb_time(game)
-        hltb_metric = self.hltb_metric_filter.currentText()
 
-        if hltb_time is None:
-            time_text = "Unknown completion time"
-        else:
-            time_text = f"{hltb_metric}: {hltb_time:.1f} hours"
+        for row, filtered_game in enumerate(self.filtered_games):
+            if filtered_game.app_id != game.app_id:
+                continue
 
-        QMessageBox.information(self, "Play This", f"{game.name}\n\n{time_text}")
+            index = self.game_table_model.index(
+                row,
+                0,
+            )
+
+            self.table.selectRow(row)
+
+            self.table.scrollTo(
+                index,
+                QAbstractItemView.ScrollHint.PositionAtCenter,
+            )
+
+            self.table.setFocus()
+
+            return
 
     def change_manual_status(self, selected_status):
         if self.selected_game is None:
@@ -1037,9 +1110,14 @@ class LibraryTab(QWidget):
             )
 
         if column == 4:
+            ratings = load_game_ratings()
+
             return sorted(
                 games,
-                key=lambda game: game.playtime_2weeks_minutes or 0,
+                key=lambda game: ratings.get(
+                    game.app_id,
+                    0,
+                ),
                 reverse=reverse,
             )
 
@@ -1104,3 +1182,6 @@ class LibraryTab(QWidget):
             )
 
         return games
+
+    def refresh_ratings(self):
+        self.game_table_model.set_ratings(load_game_ratings())

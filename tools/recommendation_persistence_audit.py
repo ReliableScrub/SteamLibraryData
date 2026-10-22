@@ -98,7 +98,9 @@ def main():
         )
 
     build_scores = {score.app_id: score for score in build.scores}
+    expected_top_pick_ids = {score.app_id for score in build.top_picks}
 
+    saved_top_pick_ids = set()
     explanation_count = 0
     missing_explanation_count = 0
     invalid_json_count = 0
@@ -119,6 +121,11 @@ def main():
             explanation_json,
             row_generated_at,
         ) = row
+
+        if match_tier == "top_pick":
+            saved_top_pick_ids.add(app_id)
+        elif match_tier is not None:
+            problems.append(f"Unknown match tier {match_tier!r} for App ID {app_id}.")
 
         generated_score = build_scores.get(app_id)
 
@@ -246,6 +253,23 @@ def main():
 
             print(f"    JSON bytes: {len(explanation_json.encode('utf-8'))}")
 
+    if saved_top_pick_ids != expected_top_pick_ids:
+        missing_top_picks = expected_top_pick_ids - saved_top_pick_ids
+
+        unexpected_top_picks = saved_top_pick_ids - expected_top_pick_ids
+
+        if missing_top_picks:
+            problems.append(
+                "Missing persisted top picks: "
+                + ", ".join(str(app_id) for app_id in sorted(missing_top_picks))
+            )
+
+        if unexpected_top_picks:
+            problems.append(
+                "Unexpected persisted top picks: "
+                + ", ".join(str(app_id) for app_id in sorted(unexpected_top_picks))
+            )
+
     if missing_explanation_count:
         problems.append(
             f"{missing_explanation_count} saved recommendations have no explanation."
@@ -268,7 +292,7 @@ def main():
     print(f"Missing explanations: {missing_explanation_count}")
     print(f"Invalid JSON: {invalid_json_count}")
     print(f"Invalid structures: {invalid_structure_count}")
-
+    print(f"Top picks: {len(saved_top_pick_ids)}")
     print()
 
     if problems:

@@ -111,11 +111,13 @@ def save_recommendation_build(
         or {}
     )
 
+    top_pick_app_ids = {score.app_id for score in build.top_picks}
+
     recommendation_rows = [
         (
             score.app_id,
             score.recommendation_score,
-            None,
+            ("top_pick" if score.app_id in top_pick_app_ids else None),
             serialize_explanation(explanations.get(score.app_id)),
             generated_at,
         )
