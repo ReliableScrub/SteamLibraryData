@@ -1,7 +1,11 @@
+import pytest
+
 from recommendations.baseline import (
     score_unplayed_games as score_baseline_games,
 )
 from recommendations.clustering import (
+    CLUSTER_WEIGHT,
+    NEIGHBOR_WEIGHT,
     choose_cluster_count,
     train_taste_clusters,
 )
@@ -259,7 +263,7 @@ def test_kmeans_candidate_has_cluster_match():
     assert all(score.cluster_similarity > 0 for score in scores)
 
 
-def test_kmeans_uses_nearest_positive_component():
+def test_kmeans_uses_neighborhood_component():
     games = build_games()
     vectors = build_content_features(games)
 
@@ -286,12 +290,16 @@ def test_kmeans_uses_nearest_positive_component():
     for score in scores:
         baseline_score = baseline_by_id[score.app_id]
 
-        assert (
-            score.nearest_positive_similarity
-            == baseline_score.nearest_positive_adjusted_similarity
+        assert score.neighborhood_similarity == pytest.approx(
+            baseline_score.neighborhood_similarity
         )
 
-        assert score.nearest_positive_app_id == baseline_score.nearest_positive_app_id
+        expected_score = (
+            CLUSTER_WEIGHT * score.cluster_similarity
+            + NEIGHBOR_WEIGHT * baseline_score.neighborhood_similarity
+        )
+
+        assert score.recommendation_score == pytest.approx(expected_score)
 
 
 def test_kmeans_returns_none_when_cluster_count_is_too_large():

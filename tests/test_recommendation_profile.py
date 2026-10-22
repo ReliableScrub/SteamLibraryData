@@ -89,15 +89,18 @@ def test_baseline_prefers_candidate_matching_positive_taste():
 
     assert scores_by_id[3].profile_similarity > scores_by_id[4].profile_similarity
 
-    assert scores_by_id[3].nearest_positive_app_id == 1
+    assert scores_by_id[3].neighbors
+    assert scores_by_id[3].neighbors[0].app_id == 1
 
     assert (
-        scores_by_id[3].nearest_positive_adjusted_similarity
-        > scores_by_id[4].nearest_positive_adjusted_similarity
+        scores_by_id[3].neighborhood_similarity
+        > scores_by_id[4].neighborhood_similarity
     )
 
+    assert scores_by_id[3].recommendation_score > scores_by_id[4].recommendation_score
 
-def test_nearest_game_is_chosen_by_similarity_not_rating_strength():
+
+def test_best_neighbor_is_chosen_by_similarity_not_rating_strength():
     games = [
         make_game(
             app_id=1,
@@ -149,18 +152,18 @@ def test_nearest_game_is_chosen_by_similarity_not_rating_strength():
 
     candidate = next(score for score in scores if score.app_id == 3)
 
-    assert candidate.nearest_positive_app_id == 2
-    assert candidate.nearest_positive_similarity > 0
-    assert candidate.nearest_positive_adjusted_similarity > 0
+    assert candidate.neighbors
+    assert candidate.neighbors[0].app_id == 2
+    assert candidate.neighbors[0].similarity > 0
 
-    assert candidate.nearest_positive_feedback_score == 0.5
+    assert candidate.neighbors[0].feedback_score == pytest.approx(0.5)
 
-    assert candidate.nearest_positive_feedback_confidence == 1.0
+    assert candidate.neighbors[0].feedback_confidence == pytest.approx(1.0)
 
-    assert candidate.nearest_positive_feedback_weight == 0.5
+    assert candidate.neighbors[0].feedback_weight == pytest.approx(0.5)
 
 
-def test_very_weak_implicit_feedback_is_not_used_as_reference():
+def test_very_weak_implicit_feedback_is_not_used_as_neighbor():
     games = [
         make_game(
             app_id=1,
@@ -196,9 +199,8 @@ def test_very_weak_implicit_feedback_is_not_used_as_reference():
 
     candidate = next(score for score in scores if score.app_id == 2)
 
-    assert candidate.nearest_positive_app_id is None
-    assert candidate.nearest_positive_similarity == 0.0
-    assert candidate.nearest_positive_adjusted_similarity == 0.0
+    assert candidate.neighbors == ()
+    assert candidate.neighborhood_similarity == 0.0
 
 
 def test_sparse_perfect_match_is_discounted():
@@ -238,10 +240,15 @@ def test_sparse_perfect_match_is_discounted():
 
     candidate = next(score for score in scores if score.app_id == 2)
 
-    assert candidate.nearest_positive_similarity == pytest.approx(1.0)
-    assert candidate.nearest_positive_shared_features == 2
+    assert len(candidate.neighbors) == 1
 
-    assert candidate.nearest_positive_adjusted_similarity == pytest.approx(0.2)
+    neighbor = candidate.neighbors[0]
+
+    assert neighbor.similarity == pytest.approx(1.0)
+    assert neighbor.shared_features == 2
+    assert neighbor.adjusted_similarity == pytest.approx(0.2)
+
+    assert candidate.neighborhood_similarity == pytest.approx(0.2)
 
 
 def test_rich_perfect_match_keeps_full_similarity():
@@ -277,13 +284,18 @@ def test_rich_perfect_match_keeps_full_similarity():
 
     candidate = next(score for score in scores if score.app_id == 2)
 
-    assert candidate.nearest_positive_similarity == pytest.approx(1.0)
-    assert candidate.nearest_positive_shared_features == 10
+    assert len(candidate.neighbors) == 1
 
-    assert candidate.nearest_positive_adjusted_similarity == pytest.approx(1.0)
+    neighbor = candidate.neighbors[0]
+
+    assert neighbor.similarity == pytest.approx(1.0)
+    assert neighbor.shared_features == 10
+    assert neighbor.adjusted_similarity == pytest.approx(1.0)
+
+    assert candidate.neighborhood_similarity == pytest.approx(1.0)
 
 
-def test_zero_similarity_does_not_create_nearest_reference():
+def test_zero_similarity_does_not_create_positive_neighbors():
     games = [
         make_game(
             app_id=1,
@@ -320,7 +332,5 @@ def test_zero_similarity_does_not_create_nearest_reference():
 
     candidate = next(score for score in scores if score.app_id == 2)
 
-    assert candidate.nearest_positive_app_id is None
-    assert candidate.nearest_positive_similarity == 0.0
-    assert candidate.nearest_positive_adjusted_similarity == 0.0
-    assert candidate.nearest_positive_shared_features == 0
+    assert candidate.neighbors == ()
+    assert candidate.neighborhood_similarity == 0.0
