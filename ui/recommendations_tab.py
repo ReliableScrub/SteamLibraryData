@@ -14,6 +14,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QCompleter,
     QDoubleSpinBox,
@@ -270,7 +271,13 @@ class RecommendationsTab(QWidget):
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setObjectName("recommendationMediaPanel")
 
-        palette = panel.palette()
+        app = QApplication.instance()
+
+        if app is not None:
+            palette = app.palette()
+        else:
+            palette = panel.palette()
+
         border_color = palette.color(QPalette.ColorRole.Mid).name()
         background_color = palette.color(QPalette.ColorRole.Base).name()
 
@@ -281,6 +288,13 @@ class RecommendationsTab(QWidget):
             f" background-color: {background_color};"
             "}"
         )
+
+    def refresh_theme(self):
+        self._style_media_panel(self.for_you_left_panel)
+        self._style_media_panel(self.similar_left_panel)
+
+        self.for_you_left_panel.update()
+        self.similar_left_panel.update()
 
     @staticmethod
     def _style_details_browser(browser):

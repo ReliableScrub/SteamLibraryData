@@ -2,6 +2,8 @@ import json
 
 from storage.paths import SETTINGS_FILE
 
+VALID_APPEARANCES = {"System", "Light", "Dark"}
+
 
 def load_settings():
     if not SETTINGS_FILE.exists():
@@ -28,14 +30,12 @@ def save_settings(settings):
 
 def get_steam_id():
     settings = load_settings()
-
     steam_id = settings.get("steam_id")
 
     if not isinstance(steam_id, str):
         return None
 
     steam_id = steam_id.strip()
-
     return steam_id or None
 
 
@@ -47,18 +47,11 @@ def set_steam_id(steam_id):
 
     settings = load_settings()
     settings["steam_id"] = steam_id
-
     save_settings(settings)
 
+
 def get_library_view_settings():
-    if not SETTINGS_FILE.exists():
-        return {}
-
-    try:
-        settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
+    settings = load_settings()
     library_view = settings.get("library_view")
 
     if not isinstance(library_view, dict):
@@ -68,21 +61,25 @@ def get_library_view_settings():
 
 
 def set_library_view_settings(library_view):
-    settings = {}
-
-    if SETTINGS_FILE.exists():
-        try:
-            settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            settings = {}
-
-    if not isinstance(settings, dict):
-        settings = {}
-
+    settings = load_settings()
     settings["library_view"] = library_view
+    save_settings(settings)
 
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_FILE.write_text(
-        json.dumps(settings, indent=2),
-        encoding="utf-8",
-    )
+
+def get_appearance():
+    settings = load_settings()
+    appearance = settings.get("appearance", "System")
+
+    if appearance not in VALID_APPEARANCES:
+        return "System"
+
+    return appearance
+
+
+def set_appearance(appearance):
+    if appearance not in VALID_APPEARANCES:
+        raise ValueError(f"Invalid appearance: {appearance}")
+
+    settings = load_settings()
+    settings["appearance"] = appearance
+    save_settings(settings)

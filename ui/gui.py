@@ -1,7 +1,7 @@
 import sys
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStyleFactory,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -30,16 +31,19 @@ from storage.database import (
 )
 from storage.image_cache import clear_image_cache
 from storage.settings import (
+    get_appearance,
+    set_appearance,
+)
+from storage.settings import (
     get_steam_id as get_saved_steam_id,
 )
 from storage.settings import (
     set_steam_id as save_steam_id,
 )
 from ui.library_tab import LibraryTab
+from ui.maintenance_tab import MaintenanceTab
 from ui.recommendations_tab import RecommendationsTab
-from ui.settings_tab import SettingsTab
 from ui.update_controller import UpdateController
-from ui.updates_tab import DataUpdatesTab
 
 OFFICIAL_REPOSITORY_URL = "https://github.com/ReliableScrub/SteamLibraryData"
 DISCUSSIONS_URL = f"{OFFICIAL_REPOSITORY_URL}/discussions"
@@ -51,13 +55,71 @@ def open_external_url(url):
     QDesktopServices.openUrl(QUrl(url))
 
 
+def apply_application_theme(app, appearance, system_style_name, system_palette):
+    if appearance == "System":
+        system_style = QStyleFactory.create(system_style_name)
+
+        if system_style is not None:
+            app.setStyle(system_style)
+
+        app.setPalette(system_palette)
+        return
+
+    app.setStyle("Fusion")
+
+    if appearance == "Light":
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+
+        app.setPalette(palette)
+        return
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(37, 37, 38))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(235, 235, 235))
+    palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 48))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 48))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(235, 235, 235))
+    palette.setColor(QPalette.ColorRole.Text, QColor(235, 235, 235))
+    palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 48))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(235, 235, 235))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(150, 150, 150))
+
+    app.setPalette(palette)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, games, steam_api_key, steam_id):
+    def __init__(
+        self,
+        games,
+        steam_api_key,
+        steam_id,
+        system_style_name,
+        system_palette,
+    ):
         super().__init__()
 
         self.games = games
         self.steam_api_key = steam_api_key
         self.steam_id = steam_id
+        self.system_style_name = system_style_name
+        self.system_palette = system_palette
+        self.appearance = get_appearance()
         self.close_after_updates_stop = False
         self.update_controller = UpdateController(
             self.games,
@@ -172,15 +234,21 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.library_tab = LibraryTab(self.games, self)
         self.recommendations_tab = RecommendationsTab(self.games, self)
-        self.updates_tab = DataUpdatesTab(self)
-        self.settings_tab = SettingsTab(self.steam_id, bool(self.steam_api_key), self)
+        self.maintenance_tab = MaintenanceTab(
+            self.steam_id,
+            bool(self.steam_api_key),
+            self.appearance,
+            self,
+        )
+
+        self.updates_tab = self.maintenance_tab
+        self.settings_tab = self.maintenance_tab
 
         self.contact_tab = self._create_contact_tab()
 
         self.tabs.addTab(self.library_tab, "Library")
         self.tabs.addTab(self.recommendations_tab, "Recommendations")
-        self.tabs.addTab(self.updates_tab, "Data Updates")
-        self.tabs.addTab(self.settings_tab, "Settings")
+        self.tabs.addTab(self.maintenance_tab, "Maintenance")
         self.tabs.addTab(self.contact_tab, "Contact")
 
         self.setCentralWidget(self.tabs)
@@ -219,6 +287,10 @@ class MainWindow(QMainWindow):
         self.settings_tab.clear_images_button.clicked.connect(self.clear_cached_images)
 
         self.settings_tab.reset_database_button.clicked.connect(self.reset_database)
+
+        self.maintenance_tab.appearance_combo.currentTextChanged.connect(
+            self.change_appearance
+        )
 
     def _bind_update_controller(self):
         self.update_controller.status_changed.connect(self.updates_tab.set_status)
@@ -482,6 +554,24 @@ class MainWindow(QMainWindow):
         )
 
         QApplication.quit()
+
+    def change_appearance(self, appearance):
+        self.appearance = appearance
+        set_appearance(appearance)
+
+        app = QApplication.instance()
+
+        if app is None:
+            return
+
+        apply_application_theme(
+            app,
+            appearance,
+            self.system_style_name,
+            self.system_palette,
+        )
+
+        self.recommendations_tab.refresh_theme()
 
     def clear_cached_images(self):
         clear_image_cache()
@@ -819,6 +909,18 @@ def prompt_for_api_key_change(steam_id):
 def run_gui(games, steam_api_key):
     app = QApplication(sys.argv)
 
+    system_style_name = app.style().objectName()
+    system_palette = QPalette(app.palette())
+
+    appearance = get_appearance()
+
+    apply_application_theme(
+        app,
+        appearance,
+        system_style_name,
+        system_palette,
+    )
+
     saved_steam_id = get_saved_steam_id()
     database_steam_id = get_database_steam_id()
 
@@ -884,6 +986,8 @@ def run_gui(games, steam_api_key):
         games,
         steam_api_key,
         steam_id,
+        system_style_name,
+        system_palette,
     )
 
     window.show()
