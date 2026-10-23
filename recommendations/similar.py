@@ -63,10 +63,7 @@ def _is_backlog_candidate(game):
 
     is_backlog_eligible = getattr(game, "is_backlog_eligible", None)
 
-    if callable(is_backlog_eligible) and not is_backlog_eligible():
-        return False
-
-    return True
+    return not (callable(is_backlog_eligible) and not is_backlog_eligible())
 
 
 class SimilarGameIndex:

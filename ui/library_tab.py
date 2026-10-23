@@ -1,10 +1,8 @@
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -22,7 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from api.store_api import get_trailer_url
 from game_updates import apply_hltb_candidate, mark_hltb_no_match
 from storage.database import (
     clear_game_rating,
@@ -39,6 +36,7 @@ from storage.settings import (
 )
 from ui.game_table_model import GameTableModel
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.trailer_player import TrailerPlayer
 
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
@@ -226,20 +224,7 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(False)
 
-        self.trailer_button = QPushButton("Watch Trailer")
-
-        self.trailer_button.setEnabled(False)
-
-        self.video_widget = QVideoWidget()
-
-        self.video_widget.setMinimumSize(0, 0)
-        self.video_widget.setVisible(False)
-
-        self.media_player = QMediaPlayer(self)
-        self.audio_output = QAudioOutput(self)
-
-        self.media_player.setVideoOutput(self.video_widget)
-        self.media_player.setAudioOutput(self.audio_output)
+        self.trailer_player = TrailerPlayer(self)
 
     def _create_layout(self):
         layout = QVBoxLayout(self)
@@ -301,15 +286,12 @@ class LibraryTab(QWidget):
 
         details_layout.addWidget(self.game_details)
 
-        details_layout.addStretch()
-        details_layout.addWidget(
-            self.video_widget, alignment=Qt.AlignmentFlag.AlignHCenter
-        )
+        details_layout.addWidget(self.trailer_player, 1)
 
         action_row = QHBoxLayout()
-
         action_row.addWidget(self.steam_page_button)
-        action_row.addWidget(self.trailer_button)
+        action_row.addStretch()
+
         details_layout.addLayout(action_row)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -346,8 +328,6 @@ class LibraryTab(QWidget):
         self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
-        self.trailer_button.clicked.connect(self.open_selected_trailer)
-        self.media_player.errorOccurred.connect(self.handle_video_error)
         self.splitter.splitterMoved.connect(self.update_media_sizes)
         self.rating_filter.currentTextChanged.connect(self.apply_filters)
 
@@ -602,7 +582,7 @@ class LibraryTab(QWidget):
         if game is None:
             return
 
-        self.stop_trailer()
+        self.trailer_player.set_game(game.app_id)
         self.game_title.setText(game.name)
 
         playtime_hours = game.playtime_minutes / 60
@@ -630,7 +610,7 @@ class LibraryTab(QWidget):
 
         if last_played_timestamp > 0:
             last_played_text = (
-                datetime.fromtimestamp(last_played_timestamp, tz=timezone.utc)
+                datetime.fromtimestamp(last_played_timestamp, tz=UTC)
                 .astimezone()
                 .strftime("%b %d, %Y")
             )
@@ -676,7 +656,6 @@ class LibraryTab(QWidget):
             f"Last played: {last_played_text}\nLast 2 weeks: {recent_activity_text}\n\nSteam Playtime: {playtime_hours:.1f} hours\nSteam Type: {steam_type_text}\nHLTB ({hltb_metric}): {hltb_text}\nAchievements: {achievement_text}\n\nGenres: {genres}\n\nTags: {tags}"
         )
         self.steam_page_button.setEnabled(True)
-        self.trailer_button.setEnabled(True)
 
         try:
             image_path = get_game_image(game.app_id)
@@ -924,7 +903,7 @@ class LibraryTab(QWidget):
     def clear_game_details(self):
         self.selected_game = None
 
-        self.stop_trailer()
+        self.trailer_player.clear_game()
         self.game_title.setText("No game selected")
         self.status_value.setText("No game selected")
 
@@ -943,8 +922,6 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(False)
 
-        self.trailer_button.setEnabled(False)
-
         self.current_game_pixmap = None
 
     def open_selected_steam_page(self):
@@ -955,57 +932,6 @@ class LibraryTab(QWidget):
 
         QDesktopServices.openUrl(url)
 
-    def open_selected_trailer(self):
-        if self.selected_game is None:
-            return
-
-        if self.video_widget.isVisible():
-            self.stop_trailer()
-
-            return
-
-        self.trailer_button.setEnabled(False)
-        self.trailer_button.setText("Loading...")
-
-        try:
-            trailer_url = get_trailer_url(self.selected_game.app_id)
-
-            if trailer_url is None:
-                QMessageBox.information(
-                    self, "Trailer", "No Steam trailer is available for this game."
-                )
-                self.trailer_button.setText("Watch Trailer")
-
-                return
-
-            self.video_widget.setVisible(True)
-            self.media_player.setSource(QUrl(trailer_url))
-            self.media_player.play()
-
-            self.trailer_button.setText("Stop Trailer")
-        except Exception as error:  # noqa: BLE001
-            QMessageBox.warning(
-                self, "Trailer", f"Could not load the trailer:\n{error}"
-            )
-            self.trailer_button.setText("Watch Trailer")
-        finally:
-            self.trailer_button.setEnabled(True)
-
-    def handle_video_error(self, error, error_string):
-        if error == QMediaPlayer.Error.NoError:
-            return
-
-        self.stop_trailer()
-        QMessageBox.warning(
-            self, "Video Playback", f"The trailer could not be played:\n{error_string}"
-        )
-
-    def stop_trailer(self):
-        self.media_player.stop()
-        self.media_player.setSource(QUrl())
-        self.video_widget.setVisible(False)
-        self.trailer_button.setText("Watch Trailer")
-
     def update_media_sizes(self):
         layout = self.details_panel.layout()
         margins = layout.contentsMargins()
@@ -1014,10 +940,7 @@ class LibraryTab(QWidget):
         )
         media_width = min(max(available_width, 1), 650)
         image_height = int(media_width * 215 / 460)
-        video_height = int(media_width * 9 / 16)
-
         self.game_image.setFixedSize(media_width, image_height)
-        self.video_widget.setFixedSize(media_width, video_height)
 
         if self.current_game_pixmap is not None:
             scaled_pixmap = self.current_game_pixmap.scaled(
@@ -1033,6 +956,10 @@ class LibraryTab(QWidget):
 
         if hasattr(self, "details_panel"):
             QTimer.singleShot(0, self.update_media_sizes)
+
+    def hideEvent(self, event):
+        self.trailer_player.pause()
+        super().hideEvent(event)
 
     def sort_by_column(self, column):
         if self.header_sort_column == column:

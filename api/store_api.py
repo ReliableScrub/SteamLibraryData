@@ -2,15 +2,12 @@ import requests
 
 STORE_DETAILS_URL = "https://store.steampowered.com/api/appdetails"
 
+
 def get_trailer_url(app_id):
     response = requests.get(
         STORE_DETAILS_URL,
-        params={
-            "appids": app_id,
-            "cc": "US",
-            "l": "english"
-        },
-        timeout=15
+        params={"appids": app_id, "cc": "US", "l": "english"},
+        timeout=15,
     )
     response.raise_for_status()
 

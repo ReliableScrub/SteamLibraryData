@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from PySide6.QtCore import QAbstractTableModel, Qt
@@ -57,7 +57,7 @@ class GameTableModel(QAbstractTableModel):
                 return (
                     datetime.fromtimestamp(
                         timestamp,
-                        tz=timezone.utc,
+                        tz=UTC,
                     )
                     .astimezone()
                     .strftime("%b %d, %Y")
