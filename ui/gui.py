@@ -241,9 +241,6 @@ class MainWindow(QMainWindow):
             self,
         )
 
-        self.updates_tab = self.maintenance_tab
-        self.settings_tab = self.maintenance_tab
-
         self.contact_tab = self._create_contact_tab()
 
         self.tabs.addTab(self.library_tab, "Library")
@@ -256,51 +253,57 @@ class MainWindow(QMainWindow):
     def _bind_tabs(self):
         self.library_tab.data_changed.connect(self.update_controller.refresh_statuses)
 
-        self.updates_tab.library_button.clicked.connect(self.start_library_refresh)
+        self.maintenance_tab.library_button.clicked.connect(self.start_library_refresh)
 
-        self.updates_tab.steam_classification_button.clicked.connect(
+        self.maintenance_tab.steam_classification_button.clicked.connect(
             self.start_steam_classification
         )
 
-        self.updates_tab.hltb_button.clicked.connect(self.start_hltb_update)
+        self.maintenance_tab.hltb_button.clicked.connect(self.start_hltb_update)
 
-        self.updates_tab.hltb_review_button.clicked.connect(
+        self.maintenance_tab.hltb_review_button.clicked.connect(
             self.library_tab.review_hltb_matches
         )
 
-        self.updates_tab.metadata_button.clicked.connect(self.start_metadata_update)
+        self.maintenance_tab.metadata_button.clicked.connect(self.start_metadata_update)
 
-        self.updates_tab.achievement_button.clicked.connect(
+        self.maintenance_tab.achievement_button.clicked.connect(
             self.start_achievement_update
         )
 
-        self.updates_tab.update_all_button.clicked.connect(
+        self.maintenance_tab.update_all_button.clicked.connect(
             self.start_missing_data_update
         )
 
-        self.updates_tab.cancel_updates_button.clicked.connect(self.cancel_updates)
+        self.maintenance_tab.cancel_updates_button.clicked.connect(self.cancel_updates)
 
-        self.settings_tab.change_steam_id_button.clicked.connect(self.change_steam_id)
+        self.maintenance_tab.change_steam_id_button.clicked.connect(
+            self.change_steam_id
+        )
 
-        self.settings_tab.change_api_key_button.clicked.connect(self.change_api_key)
+        self.maintenance_tab.change_api_key_button.clicked.connect(self.change_api_key)
 
-        self.settings_tab.clear_images_button.clicked.connect(self.clear_cached_images)
+        self.maintenance_tab.clear_images_button.clicked.connect(
+            self.clear_cached_images
+        )
 
-        self.settings_tab.reset_database_button.clicked.connect(self.reset_database)
+        self.maintenance_tab.reset_database_button.clicked.connect(self.reset_database)
 
         self.maintenance_tab.appearance_combo.currentTextChanged.connect(
             self.change_appearance
         )
 
     def _bind_update_controller(self):
-        self.update_controller.status_changed.connect(self.updates_tab.set_status)
+        self.update_controller.status_changed.connect(self.maintenance_tab.set_status)
 
-        self.update_controller.progress_changed.connect(self.updates_tab.set_progress)
+        self.update_controller.progress_changed.connect(
+            self.maintenance_tab.set_progress
+        )
 
         self.update_controller.busy_changed.connect(self._update_busy_state)
 
         self.update_controller.review_available_changed.connect(
-            self.updates_tab.set_review_available
+            self.maintenance_tab.set_review_available
         )
 
         self.update_controller.games_changed.connect(self._games_changed)
@@ -312,13 +315,7 @@ class MainWindow(QMainWindow):
         self.update_controller.item_failed.connect(print)
 
     def _update_busy_state(self, busy):
-        self.updates_tab.set_busy(busy)
-
-        self.settings_tab.change_steam_id_button.setEnabled(not busy)
-
-        self.settings_tab.change_api_key_button.setEnabled(not busy)
-
-        self.settings_tab.reset_database_button.setEnabled(not busy)
+        self.maintenance_tab.set_busy(busy)
 
     def _games_changed(self, games):
         self.games = games
@@ -393,7 +390,7 @@ class MainWindow(QMainWindow):
         self.update_controller.start_all_missing(steam_id)
 
     def cancel_updates(self):
-        self.updates_tab.cancel_updates_button.setEnabled(False)
+        self.maintenance_tab.cancel_updates_button.setEnabled(False)
         self.update_controller.cancel()
 
     def get_steam_id(self):
@@ -517,7 +514,7 @@ class MainWindow(QMainWindow):
             return
 
         self.steam_id = steam_id
-        self.settings_tab.set_steam_id(steam_id)
+        self.maintenance_tab.set_steam_id(steam_id)
 
         QMessageBox.information(
             self,
@@ -543,7 +540,7 @@ class MainWindow(QMainWindow):
             return
 
         self.steam_api_key = new_api_key
-        self.settings_tab.set_api_key_configured(True)
+        self.maintenance_tab.set_api_key_configured(True)
 
         QMessageBox.information(
             self,
