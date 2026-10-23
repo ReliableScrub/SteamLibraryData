@@ -12,7 +12,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
@@ -103,6 +103,8 @@ class RecommendationsTab(QWidget):
         self._create_controls()
         self._create_layout()
         self._connect_signals()
+        self._update_media_sizes()
+        self._update_responsive_typography()
 
         self.genre_tag_filter.set_available_from_games(self.games)
 
@@ -176,6 +178,7 @@ class RecommendationsTab(QWidget):
         self.for_you_image = QLabel("No recommendation selected")
         self.for_you_image.setFixedSize(CARD_IMAGE_WIDTH, CARD_IMAGE_HEIGHT)
         self.for_you_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.for_you_image.setProperty("image_path", None)
 
         self.for_you_hltb = QLabel(self._empty_hltb_text())
         self.for_you_hltb.setWordWrap(True)
@@ -196,12 +199,14 @@ class RecommendationsTab(QWidget):
 
         self.for_you_title = QLabel("No recommendation selected")
         self.for_you_title.setWordWrap(True)
-        self.for_you_title.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        self.for_you_title.setStyleSheet("font-size: 17pt; font-weight: bold;")
 
         self.for_you_summary = QLabel("")
         self.for_you_summary.setWordWrap(True)
+        self.for_you_summary.setTextFormat(Qt.TextFormat.RichText)
 
         self.for_you_details = QTextBrowser()
+        self._style_details_browser(self.for_you_details)
 
         self.reference_combo = QComboBox()
         self.reference_combo.setEditable(True)
@@ -239,6 +244,7 @@ class RecommendationsTab(QWidget):
         self.similar_image = QLabel("Choose a reference game")
         self.similar_image.setFixedSize(CARD_IMAGE_WIDTH, CARD_IMAGE_HEIGHT)
         self.similar_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.similar_image.setProperty("image_path", None)
 
         self.similar_hltb = QLabel(self._empty_hltb_text())
         self.similar_hltb.setWordWrap(True)
@@ -250,12 +256,65 @@ class RecommendationsTab(QWidget):
 
         self.similar_title = QLabel("No similar game selected")
         self.similar_title.setWordWrap(True)
-        self.similar_title.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        self.similar_title.setStyleSheet("font-size: 17pt; font-weight: bold;")
 
         self.similar_summary = QLabel("")
         self.similar_summary.setWordWrap(True)
+        self.similar_summary.setTextFormat(Qt.TextFormat.RichText)
 
         self.similar_details = QTextBrowser()
+        self._style_details_browser(self.similar_details)
+
+    @staticmethod
+    def _style_media_panel(panel):
+        panel.setFrameShape(QFrame.Shape.StyledPanel)
+        panel.setObjectName("recommendationMediaPanel")
+
+        palette = panel.palette()
+        border_color = palette.color(QPalette.ColorRole.Mid).name()
+        background_color = palette.color(QPalette.ColorRole.Base).name()
+
+        panel.setStyleSheet(
+            "#recommendationMediaPanel {"
+            f" border: 1px solid {border_color};"
+            " border-radius: 8px;"
+            f" background-color: {background_color};"
+            "}"
+        )
+
+    @staticmethod
+    def _style_details_browser(browser):
+        font = browser.font()
+        font.setPointSize(11)
+        browser.setFont(font)
+
+        browser.document().setDefaultStyleSheet(
+            "h3 { margin-top: 14px; margin-bottom: 4px; }"
+            "p { margin-top: 3px; margin-bottom: 10px; }"
+        )
+
+    @staticmethod
+    def _friendly_score(score):
+        try:
+            value = float(score)
+        except (TypeError, ValueError):
+            return "Unknown"
+
+        if 0.0 <= value <= 1.0:
+            return f"{value * 100:.0f}%"
+
+        return f"{value:.3f}"
+
+    @staticmethod
+    def _recommendation_match_label(record):
+        if record.get("match_tier") == "top_pick":
+            return "Top Pick"
+
+        return "Recommended"
+
+    @staticmethod
+    def _similarity_match_label(_score):
+        return "Similarity"
 
     def _create_layout(self):
         root_layout = QVBoxLayout(self)
@@ -318,11 +377,13 @@ class RecommendationsTab(QWidget):
         layout.addWidget(help_label)
 
         self.for_you_left_panel = QFrame()
-        self.for_you_left_panel.setFrameShape(QFrame.Shape.StyledPanel)
-        self.for_you_left_panel.setMinimumWidth(460)
-        self.for_you_left_panel.setMaximumWidth(560)
+        self._style_media_panel(self.for_you_left_panel)
+        self.for_you_left_panel.setMinimumWidth(440)
+        self.for_you_left_panel.setMaximumWidth(620)
 
         left_layout = QVBoxLayout(self.for_you_left_panel)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(10)
 
         left_layout.addWidget(
             self.for_you_image,
@@ -332,7 +393,7 @@ class RecommendationsTab(QWidget):
         left_layout.addSpacing(8)
         left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
         left_layout.addWidget(self.for_you_hltb)
-        left_layout.addWidget(self.for_you_trailer_player, 1)
+        left_layout.addWidget(self.for_you_trailer_player)
 
         steam_row = QHBoxLayout()
         steam_row.addWidget(self.for_you_steam_button)
@@ -366,18 +427,20 @@ class RecommendationsTab(QWidget):
         splitter.addWidget(self.for_you_left_panel)
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
 
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
 
         splitter.setSizes(
             [
-                500,
-                700,
+                520,
+                780,
             ]
         )
+
+        self.for_you_splitter = splitter
 
         layout.addWidget(
             splitter,
@@ -409,12 +472,14 @@ class RecommendationsTab(QWidget):
         layout.addLayout(result_row)
         layout.addWidget(self.similar_status_label)
 
-        left_panel = QFrame()
-        left_panel.setFrameShape(QFrame.Shape.StyledPanel)
-        left_panel.setMinimumWidth(460)
-        left_panel.setMaximumWidth(560)
+        self.similar_left_panel = QFrame()
+        self._style_media_panel(self.similar_left_panel)
+        self.similar_left_panel.setMinimumWidth(440)
+        self.similar_left_panel.setMaximumWidth(620)
 
-        left_layout = QVBoxLayout(left_panel)
+        left_layout = QVBoxLayout(self.similar_left_panel)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(10)
 
         left_layout.addWidget(
             self.similar_image,
@@ -424,7 +489,7 @@ class RecommendationsTab(QWidget):
         left_layout.addSpacing(8)
         left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
         left_layout.addWidget(self.similar_hltb)
-        left_layout.addWidget(self.similar_trailer_player, 1)
+        left_layout.addWidget(self.similar_trailer_player)
 
         steam_row = QHBoxLayout()
         steam_row.addWidget(self.similar_steam_button)
@@ -444,21 +509,23 @@ class RecommendationsTab(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        splitter.addWidget(left_panel)
+        splitter.addWidget(self.similar_left_panel)
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
 
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
 
         splitter.setSizes(
             [
-                500,
-                700,
+                520,
+                780,
             ]
         )
+
+        self.similar_splitter = splitter
 
         layout.addWidget(
             splitter,
@@ -652,6 +719,14 @@ class RecommendationsTab(QWidget):
 
         return True
 
+    def _has_active_filters(self):
+        return (
+            self.type_filter.currentText() != "All Types"
+            or self.genre_tag_filter.has_active_filters()
+            or self.hltb_min_filter.value() > 0
+            or self.hltb_max_filter.value() > 0
+        )
+
     def _rebuild_for_you(self):
         previous_app_id = None
 
@@ -660,12 +735,28 @@ class RecommendationsTab(QWidget):
 
         self._cancel_for_you_animation()
 
-        if self.recommendation_state is None or not self.recommendation_records:
+        if self.recommendation_state is None:
             self.for_you_records = []
             self.saved_status_label.setText(
-                "No saved personalized recommendation build is available."
+                "Recommendations have not been generated yet."
             )
-            self._clear_for_you_card("No saved recommendations are available.")
+            self._clear_for_you_card(
+                "Generate recommendations from the data/maintenance controls "
+                "to create a personalized backlog shortlist.",
+                title="No recommendation build yet",
+            )
+            return
+
+        if not self.recommendation_records:
+            self.for_you_records = []
+            self.saved_status_label.setText(
+                "The current recommendation build has no eligible backlog candidates."
+            )
+            self._clear_for_you_card(
+                "There are currently no unplayed backlog games available "
+                "for personalized recommendations.",
+                title="No games to recommend",
+            )
             return
 
         eligible = []
@@ -689,8 +780,22 @@ class RecommendationsTab(QWidget):
                 showing_count=0,
             )
 
+            if self._has_active_filters():
+                message = (
+                    "No saved recommendations match the current filters. "
+                    "Use Clear Filters to return to the full recommendation pool."
+                )
+                title = "No recommendations match these filters"
+            else:
+                message = (
+                    "The saved recommendation build does not contain any games "
+                    "that are currently eligible in this library."
+                )
+                title = "No eligible recommendations"
+
             self._clear_for_you_card(
-                "No saved recommendations match the current filters."
+                message,
+                title=title,
             )
             return
 
@@ -861,9 +966,17 @@ class RecommendationsTab(QWidget):
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
+        match_label = self._recommendation_match_label(record)
+        score_text = self._friendly_score(record["score"])
+
         self.for_you_summary.setText(
-            f"Recommendation score: {record['score']:.4f}\n"
-            f"Steam Type: {steam_type_text}"
+            f"<span style='font-size: 12pt; font-weight: 600;'>"
+            f"{html.escape(match_label)} · {html.escape(score_text)}</span><br>"
+            f"<span>Steam Type: {html.escape(steam_type_text)}</span>"
+        )
+
+        self.for_you_summary.setToolTip(
+            f"Exact recommendation score: {record['score']:.4f}"
         )
 
         explanation = self._explanation_for(record)
@@ -875,7 +988,7 @@ class RecommendationsTab(QWidget):
             )
         )
 
-    def _clear_for_you_card(self, message):
+    def _clear_for_you_card(self, message, title="No recommendation available"):
         self.current_for_you_index = -1
 
         self.for_you_image.setProperty(
@@ -884,7 +997,8 @@ class RecommendationsTab(QWidget):
         )
 
         self.for_you_image.setPixmap(QPixmap())
-        self.for_you_image.setText("No recommendation selected")
+        self.for_you_image.setProperty("image_path", None)
+        self.for_you_image.setText(title)
 
         self.for_you_hltb.setText(self._empty_hltb_text())
 
@@ -896,7 +1010,7 @@ class RecommendationsTab(QWidget):
 
         self.for_you_position_label.setText("0 of 0")
 
-        self.for_you_title.setText("No recommendation selected")
+        self.for_you_title.setText(title)
 
         self.for_you_summary.setText("")
         self.for_you_details.setPlainText(message)
@@ -1109,7 +1223,7 @@ class RecommendationsTab(QWidget):
             )
 
             if supporting_games:
-                parts.append("<h3>Similar games you've played</h3>")
+                parts.append("<h3>Based on games you've played</h3>")
 
                 for supporting_game in supporting_games:
                     name = html.escape(
@@ -1121,20 +1235,6 @@ class RecommendationsTab(QWidget):
 
                     similarity = supporting_game.get(
                         "adjusted_similarity",
-                        0.0,
-                    )
-
-                    evidence = html.escape(
-                        str(
-                            supporting_game.get(
-                                "evidence",
-                                "unknown",
-                            )
-                        )
-                    )
-
-                    feedback_weight = supporting_game.get(
-                        "feedback_weight",
                         0.0,
                     )
 
@@ -1153,10 +1253,7 @@ class RecommendationsTab(QWidget):
 
                     parts.append(
                         f"<p><b>{name}</b><br>"
-                        f"Similarity: {similarity:.4f}<br>"
-                        f"Evidence: {evidence}<br>"
-                        f"Feedback weight: "
-                        f"{feedback_weight:.3f}"
+                        f"Similarity: {self._friendly_score(similarity)}"
                     )
 
                     if shared_names:
@@ -1255,6 +1352,19 @@ class RecommendationsTab(QWidget):
 
             return
 
+        if not reference_game.genres and not reference_game.tags:
+            self.similar_reference_app_id = reference_app_id
+            self.similar_all_scores = []
+            self.similar_status_label.setText(
+                f"{reference_game.name} does not have usable genre/tag metadata "
+                "for similarity matching."
+            )
+            self._clear_similar_card(
+                "Choose a reference game with Steam genres or SteamSpy tags.",
+                title="Not enough metadata",
+            )
+            return
+
         self.similar_reference_app_id = reference_app_id
 
         if self.similar_index is None:
@@ -1280,13 +1390,37 @@ class RecommendationsTab(QWidget):
         self.similar_scores = []
         self.similar_scores_by_id = {}
 
-        if self.similar_reference_app_id is None or not self.similar_all_scores:
+        if self.similar_reference_app_id is None:
             self.similar_result_combo.setEnabled(False)
+            self.similar_result_combo.blockSignals(False)
+            self.similar_status_label.setText(
+                "Choose any owned game with genre/tag data."
+            )
+            self._clear_similar_card(
+                "Choose a reference game, then find similar unplayed backlog games.",
+                title="Choose a reference game",
+            )
+            return
 
+        if not self.similar_all_scores:
+            self.similar_result_combo.setEnabled(False)
             self.similar_result_combo.blockSignals(False)
 
-            self._clear_similar_card()
+            reference_game = self.games_by_id.get(self.similar_reference_app_id)
+            reference_name = (
+                reference_game.name
+                if reference_game is not None
+                else "the selected game"
+            )
 
+            self.similar_status_label.setText(
+                f"No similar unplayed backlog games were found for {reference_name}."
+            )
+            self._clear_similar_card(
+                "No eligible unplayed games with sufficient content similarity "
+                "were found for this reference game.",
+                title="No similar games found",
+            )
             return
 
         for score in self.similar_all_scores:
@@ -1311,7 +1445,9 @@ class RecommendationsTab(QWidget):
             if game is None:
                 continue
 
-            display_text = f"{game.name} - {score.adjusted_similarity:.4f}"
+            display_text = (
+                f"{game.name} — {self._friendly_score(score.adjusted_similarity)}"
+            )
 
             self.similar_result_combo.addItem(
                 display_text,
@@ -1331,13 +1467,29 @@ class RecommendationsTab(QWidget):
         )
 
         if not has_results:
-            self.similar_status_label.setText(
-                f"No similar backlog games for "
-                f"{reference_name} match the "
-                f"current filters."
-            )
+            if self._has_active_filters():
+                self.similar_status_label.setText(
+                    f"Similar games were found for {reference_name}, but none match "
+                    "the current filters."
+                )
+                message = (
+                    "No Similar-to-a-Game results match the current filters. "
+                    "Use Clear Filters to see the available matches."
+                )
+                title = "No similar games match these filters"
+            else:
+                self.similar_status_label.setText(
+                    f"No eligible similar backlog games were found for {reference_name}."
+                )
+                message = (
+                    "No eligible unplayed backlog games remain for this reference game."
+                )
+                title = "No similar games found"
 
-            self._clear_similar_card()
+            self._clear_similar_card(
+                message,
+                title=title,
+            )
 
             return
 
@@ -1409,10 +1561,19 @@ class RecommendationsTab(QWidget):
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
+        similarity_label = self._similarity_match_label(score.adjusted_similarity)
+
+        similarity_text = self._friendly_score(score.adjusted_similarity)
+
         self.similar_summary.setText(
-            f"Similarity to {reference_name}: "
-            f"{score.adjusted_similarity:.4f}\n"
-            f"Steam Type: {steam_type_text}"
+            f"<span style='font-size: 12pt; font-weight: 600;'>"
+            f"{html.escape(similarity_label)} · {html.escape(similarity_text)}</span><br>"
+            f"<span>Similar to {html.escape(reference_name)}"
+            f" · Steam Type: {html.escape(steam_type_text)}</span>"
+        )
+
+        self.similar_summary.setToolTip(
+            f"Exact adjusted similarity: {score.adjusted_similarity:.4f}"
         )
 
         self.similar_hltb.setText(self._hltb_text(game))
@@ -1431,9 +1592,7 @@ class RecommendationsTab(QWidget):
 
         detail_parts = [
             "<h3>Why it's similar</h3>",
-            f"<p><b>Adjusted similarity:</b> {score.adjusted_similarity:.4f}<br>",
-            f"<b>Raw cosine similarity:</b> {score.similarity:.4f}<br>",
-            f"<b>Shared feature count:</b> {score.shared_feature_count}</p>",
+            f"<p><b>Shared feature count:</b> {score.shared_feature_count}</p>",
         ]
 
         if shared_traits:
@@ -1477,20 +1636,25 @@ class RecommendationsTab(QWidget):
             self.similar_image,
         )
 
-    def _clear_similar_card(self):
+    def _clear_similar_card(
+        self,
+        message="Choose a reference game to find similar backlog games.",
+        title="No similar game selected",
+    ):
         self.similar_image.setProperty(
             "steam_app_id",
             None,
         )
 
         self.similar_image.setPixmap(QPixmap())
-        self.similar_image.setText("No result selected")
+        self.similar_image.setProperty("image_path", None)
+        self.similar_image.setText(title)
 
         self.similar_hltb.setText(self._empty_hltb_text())
 
-        self.similar_title.setText("No similar game selected")
+        self.similar_title.setText(title)
         self.similar_summary.setText("")
-        self.similar_details.clear()
+        self.similar_details.setPlainText(message)
 
         self.similar_steam_button.setEnabled(False)
         self.similar_trailer_player.clear_game()
@@ -1518,7 +1682,7 @@ class RecommendationsTab(QWidget):
     @staticmethod
     def _format_hours(value):
         if value is None:
-            return "-"
+            return "—"
 
         return f"{value:.1f} h"
 
@@ -1535,7 +1699,7 @@ class RecommendationsTab(QWidget):
         )
 
     def _empty_hltb_text(self):
-        return "Main Story: -\nMain + Extra: -\nCompletionist: -\nAll Styles: -"
+        return "Main Story: —\nMain + Extra: —\nCompletionist: —\nAll Styles: —"
 
     def _request_image(
         self,
@@ -1611,8 +1775,8 @@ class RecommendationsTab(QWidget):
 
                 label.setText("Image unavailable")
 
-    @staticmethod
     def _set_image(
+        self,
         label,
         image_path,
     ):
@@ -1625,6 +1789,21 @@ class RecommendationsTab(QWidget):
 
             return
 
+        label.setProperty("image_path", image_path)
+        self._rescale_image_label(label, pixmap)
+
+    def _rescale_image_label(self, label, pixmap=None):
+        if pixmap is None:
+            image_path = label.property("image_path")
+
+            if not image_path:
+                return
+
+            pixmap = QPixmap(image_path)
+
+        if pixmap.isNull():
+            return
+
         scaled = pixmap.scaled(
             label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -1634,14 +1813,54 @@ class RecommendationsTab(QWidget):
         label.setText("")
         label.setPixmap(scaled)
 
+    def _update_media_sizes(self):
+        panels = (
+            (self.for_you_left_panel, self.for_you_image),
+            (self.similar_left_panel, self.similar_image),
+        )
+
+        for panel, label in panels:
+            layout = panel.layout()
+            margins = layout.contentsMargins()
+            available_width = (
+                panel.contentsRect().width() - margins.left() - margins.right()
+            )
+            image_width = max(320, min(available_width, 480))
+            image_height = int(image_width * CARD_IMAGE_HEIGHT / CARD_IMAGE_WIDTH)
+
+            label.setFixedSize(image_width, image_height)
+            self._rescale_image_label(label)
+
+    def _update_responsive_typography(self):
+        wide = self.width() >= 1500
+        title_size = 19 if wide else 17
+        detail_size = 12 if wide else 11
+
+        self.for_you_title.setStyleSheet(
+            f"font-size: {title_size}pt; font-weight: bold;"
+        )
+        self.similar_title.setStyleSheet(
+            f"font-size: {title_size}pt; font-weight: bold;"
+        )
+
+        for browser in (self.for_you_details, self.similar_details):
+            font = browser.font()
+            font.setPointSize(detail_size)
+            browser.setFont(font)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_media_sizes()
+        self._update_responsive_typography()
+
     def _mode_changed(self, index):
         if index == 0:
-            self.similar_trailer_player.pause()
+            self.similar_trailer_player.stop()
         else:
-            self.for_you_trailer_player.pause()
+            self.for_you_trailer_player.stop()
 
     def hideEvent(self, event):
-        self.for_you_trailer_player.pause()
-        self.similar_trailer_player.pause()
+        self.for_you_trailer_player.stop()
+        self.similar_trailer_player.stop()
 
         super().hideEvent(event)

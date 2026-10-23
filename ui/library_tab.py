@@ -8,12 +8,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableView,
     QVBoxLayout,
@@ -178,7 +180,7 @@ class LibraryTab(QWidget):
         self.game_title = QLabel("No game selected")
 
         self.game_title.setWordWrap(True)
-        self.game_title.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        self.game_title.setStyleSheet("font-size: 15pt; font-weight: bold;")
 
         self.status_label = QLabel("Status:")
 
@@ -258,9 +260,11 @@ class LibraryTab(QWidget):
 
         self.details_panel = QWidget()
 
-        self.details_panel.setMinimumWidth(220)
+        self.details_panel.setMinimumWidth(320)
 
         details_layout = QVBoxLayout(self.details_panel)
+        details_layout.setContentsMargins(12, 12, 12, 12)
+        details_layout.setSpacing(8)
 
         details_layout.addWidget(
             self.game_image, alignment=Qt.AlignmentFlag.AlignHCenter
@@ -284,9 +288,28 @@ class LibraryTab(QWidget):
 
         details_layout.addLayout(rating_row)
 
-        details_layout.addWidget(self.game_details)
+        self.metadata_scroll = QScrollArea()
+        self.metadata_scroll.setWidgetResizable(True)
+        self.metadata_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.metadata_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.metadata_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.metadata_scroll.setMinimumHeight(110)
 
-        details_layout.addWidget(self.trailer_player, 1)
+        metadata_content = QWidget()
+        metadata_layout = QVBoxLayout(metadata_content)
+        metadata_layout.setContentsMargins(0, 0, 0, 0)
+        metadata_layout.setSpacing(0)
+        metadata_layout.addWidget(self.game_details)
+        metadata_layout.addStretch()
+
+        self.metadata_scroll.setWidget(metadata_content)
+        details_layout.addWidget(self.metadata_scroll, 1)
+
+        details_layout.addWidget(self.trailer_player)
 
         action_row = QHBoxLayout()
         action_row.addWidget(self.steam_page_button)
@@ -298,12 +321,12 @@ class LibraryTab(QWidget):
 
         self.splitter.addWidget(self.table)
         self.splitter.addWidget(self.details_panel)
-        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(0, 3)
 
-        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(1, 2)
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
-        self.splitter.setSizes([700, 350])
+        self.splitter.setSizes([650, 450])
 
         layout.addLayout(search_row)
         layout.addLayout(filter_row)
@@ -938,7 +961,7 @@ class LibraryTab(QWidget):
         available_width = (
             self.details_panel.contentsRect().width() - margins.left() - margins.right()
         )
-        media_width = min(max(available_width, 1), 650)
+        media_width = min(max(available_width, 1), 520)
         image_height = int(media_width * 215 / 460)
         self.game_image.setFixedSize(media_width, image_height)
 
@@ -950,6 +973,22 @@ class LibraryTab(QWidget):
             )
 
             self.game_image.setPixmap(scaled_pixmap)
+
+        self._update_detail_typography()
+
+    def _update_detail_typography(self):
+        panel_width = self.details_panel.contentsRect().width()
+        wide = panel_width >= 560
+
+        title_size = 17 if wide else 15
+        detail_size = 12 if wide else 11
+        label_size = 11 if wide else 10
+
+        self.game_title.setStyleSheet(f"font-size: {title_size}pt; font-weight: bold;")
+        self.game_details.setStyleSheet(f"font-size: {detail_size}pt;")
+        self.status_label.setStyleSheet(f"font-size: {label_size}pt;")
+        self.status_value.setStyleSheet(f"font-size: {label_size}pt;")
+        self.rating_label.setStyleSheet(f"font-size: {label_size}pt;")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
