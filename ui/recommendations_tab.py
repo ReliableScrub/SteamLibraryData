@@ -5,8 +5,6 @@ import requests
 from PySide6.QtCore import (
     QEasingCurve,
     QObject,
-    QParallelAnimationGroup,
-    QPoint,
     QPropertyAnimation,
     QRunnable,
     Qt,
@@ -20,20 +18,18 @@ from PySide6.QtWidgets import (
     QCompleter,
     QDoubleSpinBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QSplitter,
-    QStackedLayout,
-    QStackedWidget,
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
-from api.store_api import get_trailer_url
 from recommendations.persistence import (
     load_recommendation_state,
     load_saved_recommendations,
@@ -41,6 +37,7 @@ from recommendations.persistence import (
 from recommendations.similar import SimilarGameIndex
 from storage.image_cache import get_cached_image_path, get_game_image
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.trailer_player import TrailerPlayer
 
 FOR_YOU_LIMIT = 10
 SIMILAR_SEARCH_LIMIT = 250
@@ -66,174 +63,13 @@ class ImageWorker(QRunnable):
 
         try:
             image_path = str(get_game_image(self.app_id))
-        except (requests.RequestException, OSError):
+        except (requests.RequestException, OSError, ValueError):
             image_path = None
 
         self.signals.loaded.emit(
             self.app_id,
             image_path,
         )
-
-
-class SlidingStackedWidget(QStackedWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self._animation_group = None
-
-    def is_animating(self):
-        return self._animation_group is not None
-
-    def slide_to(self, index, direction=1):
-        if not 0 <= index < self.count():
-            return
-
-        current_index = self.currentIndex()
-
-        if current_index < 0:
-            self.setCurrentIndex(index)
-            return
-
-        if current_index == index:
-            return
-
-        if self.is_animating():
-            return
-
-        width = self.width()
-
-        if width <= 0:
-            self.setCurrentIndex(index)
-            return
-
-        current_widget = self.widget(current_index)
-        next_widget = self.widget(index)
-
-        if current_widget is None or next_widget is None:
-            self.setCurrentIndex(index)
-            return
-
-        stack_layout = self.layout()
-
-        if isinstance(stack_layout, QStackedLayout):
-            stack_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
-
-        offset = width if direction >= 0 else -width
-
-        current_widget.setGeometry(self.rect())
-        next_widget.setGeometry(self.rect())
-
-        current_widget.move(
-            QPoint(
-                0,
-                0,
-            )
-        )
-
-        next_widget.move(
-            QPoint(
-                offset,
-                0,
-            )
-        )
-
-        current_widget.show()
-        next_widget.show()
-        next_widget.raise_()
-
-        current_animation = QPropertyAnimation(
-            current_widget,
-            b"pos",
-            self,
-        )
-
-        current_animation.setDuration(240)
-
-        current_animation.setStartValue(
-            QPoint(
-                0,
-                0,
-            )
-        )
-
-        current_animation.setEndValue(
-            QPoint(
-                -offset,
-                0,
-            )
-        )
-
-        current_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        next_animation = QPropertyAnimation(
-            next_widget,
-            b"pos",
-            self,
-        )
-
-        next_animation.setDuration(240)
-
-        next_animation.setStartValue(
-            QPoint(
-                offset,
-                0,
-            )
-        )
-
-        next_animation.setEndValue(
-            QPoint(
-                0,
-                0,
-            )
-        )
-
-        next_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        group = QParallelAnimationGroup(self)
-
-        group.addAnimation(current_animation)
-        group.addAnimation(next_animation)
-
-        self._animation_group = group
-
-        group.finished.connect(
-            lambda: self._finish_slide(
-                index,
-                current_widget,
-                next_widget,
-            )
-        )
-
-        group.start()
-
-    def _finish_slide(
-        self,
-        index,
-        current_widget,
-        next_widget,
-    ):
-        self.setCurrentIndex(index)
-
-        current_widget.move(
-            QPoint(
-                0,
-                0,
-            )
-        )
-
-        next_widget.move(
-            QPoint(
-                0,
-                0,
-            )
-        )
-
-        stack_layout = self.layout()
-
-        if isinstance(stack_layout, QStackedLayout):
-            stack_layout.setStackingMode(QStackedLayout.StackingMode.StackOne)
-
-        self._animation_group = None
 
 
 class RecommendationsTab(QWidget):
@@ -248,6 +84,8 @@ class RecommendationsTab(QWidget):
 
         self.for_you_records = []
         self.current_for_you_index = -1
+        self._for_you_animation = None
+        self._for_you_effect = None
 
         self.similar_index = None
         self.similar_reference_app_id = None
@@ -300,24 +138,14 @@ class RecommendationsTab(QWidget):
         )
 
         self.hltb_min_filter = QDoubleSpinBox()
-
-        self.hltb_min_filter.setRange(
-            0,
-            10000,
-        )
-
+        self.hltb_min_filter.setRange(0, 10000)
         self.hltb_min_filter.setDecimals(1)
         self.hltb_min_filter.setSingleStep(0.5)
         self.hltb_min_filter.setSpecialValueText("Min")
         self.hltb_min_filter.setSuffix(" h")
 
         self.hltb_max_filter = QDoubleSpinBox()
-
-        self.hltb_max_filter.setRange(
-            0,
-            10000,
-        )
-
+        self.hltb_max_filter.setRange(0, 10000)
         self.hltb_max_filter.setDecimals(1)
         self.hltb_max_filter.setSingleStep(0.5)
         self.hltb_max_filter.setSpecialValueText("Max")
@@ -341,28 +169,50 @@ class RecommendationsTab(QWidget):
         )
 
         self.saved_status_label = QLabel("No saved recommendations.")
-
         self.saved_status_label.setWordWrap(True)
 
         self.reload_button = QPushButton("Reload Saved Recommendations")
 
-        self.for_you_stack = SlidingStackedWidget()
+        self.for_you_image = QLabel("No recommendation selected")
+        self.for_you_image.setFixedSize(CARD_IMAGE_WIDTH, CARD_IMAGE_HEIGHT)
+        self.for_you_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.for_you_hltb = QLabel(self._empty_hltb_text())
+        self.for_you_hltb.setWordWrap(True)
+
+        self.for_you_trailer_player = TrailerPlayer(self)
+
+        self.for_you_steam_button = QPushButton("Steam Page")
+        self.for_you_steam_button.setEnabled(False)
+
+        self.for_you_previous_button = QPushButton("Previous")
+        self.for_you_previous_button.setEnabled(False)
+
+        self.for_you_position_label = QLabel("0 of 0")
+        self.for_you_position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.for_you_next_button = QPushButton("Next")
+        self.for_you_next_button.setEnabled(False)
+
+        self.for_you_title = QLabel("No recommendation selected")
+        self.for_you_title.setWordWrap(True)
+        self.for_you_title.setStyleSheet("font-size: 16pt; font-weight: bold;")
+
+        self.for_you_summary = QLabel("")
+        self.for_you_summary.setWordWrap(True)
+
+        self.for_you_details = QTextBrowser()
 
         self.reference_combo = QComboBox()
-
         self.reference_combo.setEditable(True)
-
         self.reference_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-
         self.reference_combo.setMinimumWidth(350)
 
         reference_completer = self.reference_combo.completer()
 
         if reference_completer is not None:
             reference_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-
             reference_completer.setFilterMode(Qt.MatchFlag.MatchContains)
-
             reference_completer.setCompletionMode(
                 QCompleter.CompletionMode.PopupCompletion
             )
@@ -370,53 +220,36 @@ class RecommendationsTab(QWidget):
         self.find_similar_button = QPushButton("Find Similar Backlog Games")
 
         self.similar_status_label = QLabel("Choose any owned game with genre/tag data.")
-
         self.similar_status_label.setWordWrap(True)
 
         self.similar_result_combo = QComboBox()
-
         self.similar_result_combo.setEditable(True)
-
         self.similar_result_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-
         self.similar_result_combo.setEnabled(False)
 
         result_completer = self.similar_result_combo.completer()
 
         if result_completer is not None:
             result_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-
             result_completer.setFilterMode(Qt.MatchFlag.MatchContains)
-
             result_completer.setCompletionMode(
                 QCompleter.CompletionMode.PopupCompletion
             )
 
         self.similar_image = QLabel("Choose a reference game")
-
-        self.similar_image.setFixedSize(
-            CARD_IMAGE_WIDTH,
-            CARD_IMAGE_HEIGHT,
-        )
-
+        self.similar_image.setFixedSize(CARD_IMAGE_WIDTH, CARD_IMAGE_HEIGHT)
         self.similar_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.similar_hltb = QLabel(self._empty_hltb_text())
-
         self.similar_hltb.setWordWrap(True)
 
-        self.similar_steam_button = QPushButton("Steam Page")
+        self.similar_trailer_player = TrailerPlayer(self)
 
+        self.similar_steam_button = QPushButton("Steam Page")
         self.similar_steam_button.setEnabled(False)
 
-        self.similar_trailer_button = QPushButton("Trailer")
-
-        self.similar_trailer_button.setEnabled(False)
-
         self.similar_title = QLabel("No similar game selected")
-
         self.similar_title.setWordWrap(True)
-
         self.similar_title.setStyleSheet("font-size: 16pt; font-weight: bold;")
 
         self.similar_summary = QLabel("")
@@ -435,31 +268,20 @@ class RecommendationsTab(QWidget):
         )
 
         title = QLabel("<h2>Recommendations</h2>")
-
         root_layout.addWidget(title)
 
         filter_row = QHBoxLayout()
 
         filter_row.addWidget(QLabel("Type:"))
-
         filter_row.addWidget(self.type_filter)
-
         filter_row.addWidget(self.genre_tag_filter)
-
         filter_row.addWidget(QLabel("HLTB Metric:"))
-
         filter_row.addWidget(self.hltb_metric_filter)
-
         filter_row.addWidget(QLabel("HLTB Hours:"))
-
         filter_row.addWidget(self.hltb_min_filter)
-
         filter_row.addWidget(QLabel("to"))
-
         filter_row.addWidget(self.hltb_max_filter)
-
         filter_row.addWidget(self.clear_filters_button)
-
         filter_row.addStretch()
 
         root_layout.addLayout(filter_row)
@@ -491,13 +313,74 @@ class RecommendationsTab(QWidget):
             "Filters narrow the saved recommendation pool "
             "without rebuilding the recommendation model."
         )
-
         help_label.setWordWrap(True)
 
         layout.addWidget(help_label)
 
+        self.for_you_left_panel = QFrame()
+        self.for_you_left_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        self.for_you_left_panel.setMinimumWidth(460)
+        self.for_you_left_panel.setMaximumWidth(560)
+
+        left_layout = QVBoxLayout(self.for_you_left_panel)
+
+        left_layout.addWidget(
+            self.for_you_image,
+            alignment=Qt.AlignmentFlag.AlignHCenter,
+        )
+
+        left_layout.addSpacing(8)
+        left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
+        left_layout.addWidget(self.for_you_hltb)
+        left_layout.addWidget(self.for_you_trailer_player, 1)
+
+        steam_row = QHBoxLayout()
+        steam_row.addWidget(self.for_you_steam_button)
+        steam_row.addStretch()
+
+        left_layout.addLayout(steam_row)
+
+        navigation_row = QHBoxLayout()
+
+        navigation_row.addWidget(self.for_you_previous_button)
+        navigation_row.addWidget(
+            self.for_you_position_label,
+            1,
+        )
+        navigation_row.addWidget(self.for_you_next_button)
+
+        left_layout.addLayout(navigation_row)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+
+        right_layout.addWidget(self.for_you_title)
+        right_layout.addWidget(self.for_you_summary)
+        right_layout.addWidget(
+            self.for_you_details,
+            1,
+        )
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        splitter.addWidget(self.for_you_left_panel)
+        splitter.addWidget(right_panel)
+
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+
+        splitter.setSizes(
+            [
+                500,
+                700,
+            ]
+        )
+
         layout.addWidget(
-            self.for_you_stack,
+            splitter,
             1,
         )
 
@@ -507,12 +390,10 @@ class RecommendationsTab(QWidget):
         reference_row = QHBoxLayout()
 
         reference_row.addWidget(QLabel("Reference game:"))
-
         reference_row.addWidget(
             self.reference_combo,
             1,
         )
-
         reference_row.addWidget(self.find_similar_button)
 
         layout.addLayout(reference_row)
@@ -520,22 +401,18 @@ class RecommendationsTab(QWidget):
         result_row = QHBoxLayout()
 
         result_row.addWidget(QLabel("Similar result:"))
-
         result_row.addWidget(
             self.similar_result_combo,
             1,
         )
 
         layout.addLayout(result_row)
-
         layout.addWidget(self.similar_status_label)
 
         left_panel = QFrame()
-
         left_panel.setFrameShape(QFrame.Shape.StyledPanel)
-
-        left_panel.setMinimumWidth(430)
-        left_panel.setMaximumWidth(500)
+        left_panel.setMinimumWidth(460)
+        left_panel.setMaximumWidth(560)
 
         left_layout = QVBoxLayout(left_panel)
 
@@ -545,31 +422,21 @@ class RecommendationsTab(QWidget):
         )
 
         left_layout.addSpacing(8)
-
-        hltb_heading = QLabel("<b>HowLongToBeat</b>")
-
-        left_layout.addWidget(hltb_heading)
-
+        left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
         left_layout.addWidget(self.similar_hltb)
+        left_layout.addWidget(self.similar_trailer_player, 1)
 
-        left_layout.addStretch()
+        steam_row = QHBoxLayout()
+        steam_row.addWidget(self.similar_steam_button)
+        steam_row.addStretch()
 
-        link_row = QHBoxLayout()
-
-        link_row.addWidget(self.similar_steam_button)
-
-        link_row.addWidget(self.similar_trailer_button)
-
-        left_layout.addLayout(link_row)
+        left_layout.addLayout(steam_row)
 
         right_panel = QWidget()
-
         right_layout = QVBoxLayout(right_panel)
 
         right_layout.addWidget(self.similar_title)
-
         right_layout.addWidget(self.similar_summary)
-
         right_layout.addWidget(
             self.similar_details,
             1,
@@ -578,32 +445,17 @@ class RecommendationsTab(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         splitter.addWidget(left_panel)
-
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(
-            0,
-            0,
-        )
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
-        splitter.setStretchFactor(
-            1,
-            1,
-        )
-
-        splitter.setCollapsible(
-            0,
-            False,
-        )
-
-        splitter.setCollapsible(
-            1,
-            False,
-        )
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
 
         splitter.setSizes(
             [
-                450,
+                500,
                 700,
             ]
         )
@@ -615,18 +467,17 @@ class RecommendationsTab(QWidget):
 
     def _connect_signals(self):
         self.type_filter.currentTextChanged.connect(self._filters_changed)
-
         self.genre_tag_filter.filters_changed.connect(self._filters_changed)
-
         self.hltb_metric_filter.currentTextChanged.connect(self._filters_changed)
-
         self.hltb_min_filter.valueChanged.connect(self._hltb_min_changed)
-
         self.hltb_max_filter.valueChanged.connect(self._hltb_max_changed)
-
         self.clear_filters_button.clicked.connect(self.clear_filters)
 
         self.reload_button.clicked.connect(self.refresh)
+
+        self.for_you_steam_button.clicked.connect(self._open_selected_for_you_steam)
+        self.for_you_previous_button.clicked.connect(self.previous_for_you)
+        self.for_you_next_button.clicked.connect(self.next_for_you)
 
         self.find_similar_button.clicked.connect(self.find_similar_games)
 
@@ -636,7 +487,15 @@ class RecommendationsTab(QWidget):
 
         self.similar_steam_button.clicked.connect(self._open_selected_similar_steam)
 
-        self.similar_trailer_button.clicked.connect(self._open_selected_similar_trailer)
+        self.mode_tabs.currentChanged.connect(self._mode_changed)
+
+        self.for_you_trailer_player.volume_changed.connect(
+            self.similar_trailer_player.set_volume
+        )
+
+        self.similar_trailer_player.volume_changed.connect(
+            self.for_you_trailer_player.set_volume
+        )
 
     def set_games(self, games):
         self.games = list(games)
@@ -647,6 +506,8 @@ class RecommendationsTab(QWidget):
         self.similar_all_scores = []
         self.similar_scores = []
         self.similar_scores_by_id = {}
+
+        self._clear_similar_card()
 
         self.genre_tag_filter.set_available_from_games(self.games)
 
@@ -792,15 +653,19 @@ class RecommendationsTab(QWidget):
         return True
 
     def _rebuild_for_you(self):
-        self._clear_for_you_stack()
+        previous_app_id = None
+
+        if 0 <= self.current_for_you_index < len(self.for_you_records):
+            previous_app_id = self.for_you_records[self.current_for_you_index]["app_id"]
+
+        self._cancel_for_you_animation()
 
         if self.recommendation_state is None or not self.recommendation_records:
+            self.for_you_records = []
             self.saved_status_label.setText(
                 "No saved personalized recommendation build is available."
             )
-
-            self._add_for_you_placeholder("No saved recommendations are available.")
-
+            self._clear_for_you_card("No saved recommendations are available.")
             return
 
         eligible = []
@@ -824,30 +689,25 @@ class RecommendationsTab(QWidget):
                 showing_count=0,
             )
 
-            self._add_for_you_placeholder(
+            self._clear_for_you_card(
                 "No saved recommendations match the current filters."
             )
-
             return
 
-        total = len(self.for_you_records)
+        selected_index = 0
 
-        for index, record in enumerate(self.for_you_records):
-            page = self._create_for_you_page(
-                record,
-                index,
-                total,
-            )
+        if previous_app_id is not None:
+            for index, record in enumerate(self.for_you_records):
+                if record["app_id"] == previous_app_id:
+                    selected_index = index
+                    break
 
-            self.for_you_stack.addWidget(page)
-
-        self.current_for_you_index = 0
-
-        self.for_you_stack.setCurrentIndex(0)
+        self.current_for_you_index = selected_index
+        self._populate_for_you_card()
 
         self._update_saved_status(
             eligible_count=len(eligible),
-            showing_count=total,
+            showing_count=len(self.for_you_records),
         )
 
     def _select_for_you_records(
@@ -955,251 +815,210 @@ class RecommendationsTab(QWidget):
             f"genre:{genre.casefold()}" for genre in (game.genres or []) if genre
         }
 
-        features.update(
-            {f"tag:{tag.casefold()}" for tag in (game.tags or {}) if tag}
-        )
+        features.update({f"tag:{tag.casefold()}" for tag in (game.tags or {}) if tag})
 
         return features
 
-    def _create_for_you_page(
-        self,
-        record,
-        index,
-        total,
-    ):
-        app_id = record["app_id"]
+    def _populate_for_you_card(self):
+        if not 0 <= self.current_for_you_index < len(self.for_you_records):
+            self._clear_for_you_card("No recommendation selected.")
+            return
 
-        game = self.games_by_id[app_id]
+        record = self.for_you_records[self.current_for_you_index]
+        game = self.games_by_id.get(record["app_id"])
 
-        page = QWidget()
+        if game is None:
+            self._clear_for_you_card("The selected recommendation is unavailable.")
+            return
 
-        page_layout = QHBoxLayout(page)
+        total = len(self.for_you_records)
 
-        page_layout.setContentsMargins(
-            0,
-            0,
-            0,
-            0,
+        self.for_you_image.setPixmap(QPixmap())
+        self.for_you_image.setText("Loading image…")
+
+        self._request_image(
+            game.app_id,
+            self.for_you_image,
         )
 
-        left_panel = QFrame()
+        self.for_you_hltb.setText(self._hltb_text(game))
 
-        left_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        self.for_you_trailer_player.set_game(game.app_id)
 
-        left_panel.setMinimumWidth(430)
-        left_panel.setMaximumWidth(500)
+        self.for_you_steam_button.setEnabled(True)
 
-        left_layout = QVBoxLayout(left_panel)
-
-        image_label = QLabel("Loading image…")
-
-        image_label.setFixedSize(
-            CARD_IMAGE_WIDTH,
-            CARD_IMAGE_HEIGHT,
+        self.for_you_position_label.setText(
+            f"{self.current_for_you_index + 1} of {total}"
         )
 
-        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        navigation_enabled = total > 1
 
-        left_layout.addWidget(
-            image_label,
-            alignment=Qt.AlignmentFlag.AlignHCenter,
-        )
+        self.for_you_previous_button.setEnabled(navigation_enabled)
 
-        left_layout.addSpacing(8)
+        self.for_you_next_button.setEnabled(navigation_enabled)
 
-        left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
-
-        hltb_label = QLabel(self._hltb_text(game))
-
-        hltb_label.setWordWrap(True)
-
-        left_layout.addWidget(hltb_label)
-
-        left_layout.addStretch()
-
-        link_row = QHBoxLayout()
-
-        steam_button = QPushButton("Steam Page")
-
-        trailer_button = QPushButton("Trailer")
-
-        steam_button.clicked.connect(
-            lambda _checked=False, value=app_id: self._open_steam_page(value)
-        )
-
-        trailer_button.clicked.connect(
-            lambda _checked=False, value=app_id: self._open_trailer(value)
-        )
-
-        link_row.addWidget(steam_button)
-
-        link_row.addWidget(trailer_button)
-
-        left_layout.addLayout(link_row)
-
-        navigation_row = QHBoxLayout()
-
-        previous_button = QPushButton("Previous")
-
-        next_button = QPushButton("Next")
-
-        position_label = QLabel(f"{index + 1} of {total}")
-
-        position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        previous_button.clicked.connect(self.previous_for_you)
-
-        next_button.clicked.connect(self.next_for_you)
-
-        navigation_row.addWidget(previous_button)
-
-        navigation_row.addWidget(
-            position_label,
-            1,
-        )
-
-        navigation_row.addWidget(next_button)
-
-        left_layout.addLayout(navigation_row)
-
-        right_panel = QWidget()
-
-        right_layout = QVBoxLayout(right_panel)
-
-        title_label = QLabel(game.name)
-
-        title_label.setWordWrap(True)
-
-        title_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
-
-        right_layout.addWidget(title_label)
-
-        score_label = QLabel(f"Recommendation score: {record['score']:.4f}")
-
-        score_label.setWordWrap(True)
-
-        right_layout.addWidget(score_label)
+        self.for_you_title.setText(game.name)
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
-        type_label = QLabel(f"Steam Type: {steam_type_text}")
-
-        right_layout.addWidget(type_label)
-
-        explanation_browser = QTextBrowser()
+        self.for_you_summary.setText(
+            f"Recommendation score: {record['score']:.4f}\n"
+            f"Steam Type: {steam_type_text}"
+        )
 
         explanation = self._explanation_for(record)
 
-        explanation_browser.setHtml(
+        self.for_you_details.setHtml(
             self._format_recommendation_explanation(
                 game,
                 explanation,
             )
         )
 
-        right_layout.addWidget(
-            explanation_browser,
-            1,
+    def _clear_for_you_card(self, message):
+        self.current_for_you_index = -1
+
+        self.for_you_image.setProperty(
+            "steam_app_id",
+            None,
         )
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.for_you_image.setPixmap(QPixmap())
+        self.for_you_image.setText("No recommendation selected")
 
-        splitter.addWidget(left_panel)
+        self.for_you_hltb.setText(self._empty_hltb_text())
 
-        splitter.addWidget(right_panel)
+        self.for_you_trailer_player.clear_game()
 
-        splitter.setStretchFactor(
-            0,
-            0,
-        )
+        self.for_you_steam_button.setEnabled(False)
+        self.for_you_previous_button.setEnabled(False)
+        self.for_you_next_button.setEnabled(False)
 
-        splitter.setStretchFactor(
-            1,
-            1,
-        )
+        self.for_you_position_label.setText("0 of 0")
 
-        splitter.setCollapsible(
-            0,
-            False,
-        )
+        self.for_you_title.setText("No recommendation selected")
 
-        splitter.setCollapsible(
-            1,
-            False,
-        )
-
-        splitter.setSizes(
-            [
-                450,
-                700,
-            ]
-        )
-
-        page_layout.addWidget(splitter)
-
-        self._request_image(
-            app_id,
-            image_label,
-        )
-
-        return page
+        self.for_you_summary.setText("")
+        self.for_you_details.setPlainText(message)
 
     def previous_for_you(self):
         if len(self.for_you_records) <= 1:
             return
 
-        if self.for_you_stack.is_animating():
+        if self._for_you_animation is not None:
             return
 
         new_index = (self.current_for_you_index - 1) % len(self.for_you_records)
 
-        self.current_for_you_index = new_index
-
-        self.for_you_stack.slide_to(
-            new_index,
-            direction=-1,
-        )
+        self._animate_to_for_you_index(new_index)
 
     def next_for_you(self):
         if len(self.for_you_records) <= 1:
             return
 
-        if self.for_you_stack.is_animating():
+        if self._for_you_animation is not None:
             return
 
         new_index = (self.current_for_you_index + 1) % len(self.for_you_records)
 
-        self.current_for_you_index = new_index
+        self._animate_to_for_you_index(new_index)
 
-        self.for_you_stack.slide_to(
-            new_index,
-            direction=1,
+    def _animate_to_for_you_index(self, index):
+        if not 0 <= index < len(self.for_you_records):
+            return
+
+        if index == self.current_for_you_index:
+            return
+
+        self.for_you_trailer_player.stop()
+
+        effect = QGraphicsOpacityEffect(self.for_you_left_panel)
+
+        effect.setOpacity(1.0)
+
+        self.for_you_left_panel.setGraphicsEffect(effect)
+
+        self._for_you_effect = effect
+
+        animation = QPropertyAnimation(
+            effect,
+            b"opacity",
+            self,
         )
 
-    def _clear_for_you_stack(self):
-        self.for_you_records = []
-        self.current_for_you_index = -1
+        animation.setDuration(120)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        while self.for_you_stack.count():
-            widget = self.for_you_stack.widget(0)
+        self._for_you_animation = animation
 
-            self.for_you_stack.removeWidget(widget)
+        animation.finished.connect(lambda: self._for_you_fade_out_finished(index))
 
-            widget.deleteLater()
+        animation.start()
 
-    def _add_for_you_placeholder(
-        self,
-        text,
-    ):
-        placeholder = QLabel(text)
+    def _for_you_fade_out_finished(self, index):
+        if self._for_you_animation is not None:
+            self._for_you_animation.deleteLater()
+            self._for_you_animation = None
 
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if self._for_you_effect is None:
+            return
 
-        placeholder.setWordWrap(True)
+        self.current_for_you_index = index
+        self._populate_for_you_card()
 
-        self.for_you_stack.addWidget(placeholder)
+        self._for_you_effect.setOpacity(0.0)
 
-        self.for_you_stack.setCurrentIndex(0)
+        animation = QPropertyAnimation(
+            self._for_you_effect,
+            b"opacity",
+            self,
+        )
+
+        animation.setDuration(150)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        self._for_you_animation = animation
+
+        animation.finished.connect(self._for_you_fade_in_finished)
+
+        animation.start()
+
+    def _for_you_fade_in_finished(self):
+        if self._for_you_animation is not None:
+            self._for_you_animation.deleteLater()
+            self._for_you_animation = None
+
+        if self._for_you_effect is None:
+            return
+
+        self.for_you_left_panel.setGraphicsEffect(None)
+
+        self._for_you_effect = None
+
+    def _cancel_for_you_animation(self):
+        if self._for_you_animation is not None:
+            self._for_you_animation.stop()
+            self._for_you_animation.deleteLater()
+            self._for_you_animation = None
+
+        if self._for_you_effect is None:
+            return
+
+        self.for_you_left_panel.setGraphicsEffect(None)
+
+        self._for_you_effect = None
+
+    def _open_selected_for_you_steam(self):
+        if not 0 <= self.current_for_you_index < len(self.for_you_records):
+            return
+
+        app_id = self.for_you_records[self.current_for_you_index]["app_id"]
+
+        self._open_steam_page(app_id)
 
     def _update_saved_status(
         self,
@@ -1210,7 +1029,6 @@ class RecommendationsTab(QWidget):
 
         if state is None:
             self.saved_status_label.setText("No saved recommendation build.")
-
             return
 
         (
@@ -1225,9 +1043,10 @@ class RecommendationsTab(QWidget):
         ) = state
 
         self.saved_status_label.setText(
-            f"{candidate_game_count} saved recommendations"
+            f"{len(self.recommendation_records)} saved recommendations"
             f" • {eligible_count} match filters"
             f" • showing {showing_count}"
+            f" • {candidate_game_count} candidates scored"
             f" • {method}"
             f" • model {model_version}"
             f" • features {feature_version}"
@@ -1492,7 +1311,7 @@ class RecommendationsTab(QWidget):
             if game is None:
                 continue
 
-            display_text = f"{game.name} — {score.adjusted_similarity:.4f}"
+            display_text = f"{game.name} - {score.adjusted_similarity:.4f}"
 
             self.similar_result_combo.addItem(
                 display_text,
@@ -1619,7 +1438,6 @@ class RecommendationsTab(QWidget):
 
         if shared_traits:
             detail_parts.append("<h3>Shared traits</h3>")
-
             detail_parts.append("<p>" + " • ".join(shared_traits) + "</p>")
 
         detail_parts.append("<h3>Game metadata</h3>")
@@ -1647,7 +1465,7 @@ class RecommendationsTab(QWidget):
 
         self.similar_steam_button.setEnabled(True)
 
-        self.similar_trailer_button.setEnabled(True)
+        self.similar_trailer_player.set_game(game.app_id)
 
         self.similar_image.setProperty(
             "steam_app_id",
@@ -1666,20 +1484,16 @@ class RecommendationsTab(QWidget):
         )
 
         self.similar_image.setPixmap(QPixmap())
-
         self.similar_image.setText("No result selected")
 
         self.similar_hltb.setText(self._empty_hltb_text())
 
         self.similar_title.setText("No similar game selected")
-
         self.similar_summary.setText("")
-
         self.similar_details.clear()
 
         self.similar_steam_button.setEnabled(False)
-
-        self.similar_trailer_button.setEnabled(False)
+        self.similar_trailer_player.clear_game()
 
     def _open_selected_similar_steam(self):
         app_id = self._selected_similar_app_id()
@@ -1688,14 +1502,6 @@ class RecommendationsTab(QWidget):
             return
 
         self._open_steam_page(app_id)
-
-    def _open_selected_similar_trailer(self):
-        app_id = self._selected_similar_app_id()
-
-        if app_id is None:
-            return
-
-        self._open_trailer(app_id)
 
     def _selected_similar_app_id(self):
         index = self.similar_result_combo.currentIndex()
@@ -1709,39 +1515,10 @@ class RecommendationsTab(QWidget):
     def _open_steam_page(app_id):
         QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{app_id}/"))
 
-    def _open_trailer(self, app_id):
-        try:
-            trailer_url = get_trailer_url(app_id)
-        except (
-            requests.RequestException,
-            OSError,
-            ValueError,
-            TypeError,
-            KeyError,
-        ) as error:
-            QMessageBox.warning(
-                self,
-                "Trailer",
-                f"Could not load the trailer:\n{error}",
-            )
-
-            return
-
-        if not trailer_url:
-            QMessageBox.information(
-                self,
-                "Trailer",
-                "No Steam trailer is available for this game.",
-            )
-
-            return
-
-        QDesktopServices.openUrl(QUrl(trailer_url))
-
     @staticmethod
     def _format_hours(value):
         if value is None:
-            return "—"
+            return "-"
 
         return f"{value:.1f} h"
 
@@ -1758,7 +1535,7 @@ class RecommendationsTab(QWidget):
         )
 
     def _empty_hltb_text(self):
-        return "Main Story: —\nMain + Extra: —\nCompletionist: —\nAll Styles: —"
+        return "Main Story: -\nMain + Extra: -\nCompletionist: -\nAll Styles: -"
 
     def _request_image(
         self,
@@ -1856,3 +1633,15 @@ class RecommendationsTab(QWidget):
 
         label.setText("")
         label.setPixmap(scaled)
+
+    def _mode_changed(self, index):
+        if index == 0:
+            self.similar_trailer_player.pause()
+        else:
+            self.for_you_trailer_player.pause()
+
+    def hideEvent(self, event):
+        self.for_you_trailer_player.pause()
+        self.similar_trailer_player.pause()
+
+        super().hideEvent(event)
