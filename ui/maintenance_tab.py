@@ -39,6 +39,10 @@ class MaintenanceTab(QWidget):
         self.cancel_updates_button = QPushButton("Cancel Updates")
         self.cancel_updates_button.setEnabled(False)
 
+        self.view_failures_button = QPushButton("View Failures")
+        self.view_failures_button.setVisible(False)
+        self.view_failures_button.setEnabled(False)
+
         self.update_all_progress = QProgressBar()
         self.update_all_progress.setVisible(False)
         self.update_all_progress.setFormat("%v / %m")
@@ -174,6 +178,7 @@ class MaintenanceTab(QWidget):
         update_all_buttons = QHBoxLayout()
         update_all_buttons.addWidget(self.update_all_button)
         update_all_buttons.addWidget(self.cancel_updates_button)
+        update_all_buttons.addWidget(self.view_failures_button)
 
         updates_grid.addLayout(
             update_all_buttons,
@@ -433,6 +438,17 @@ class MaintenanceTab(QWidget):
         )
 
         bar.setValue(completed)
+
+    def set_failures(self, failures):
+        count = len(failures)
+        available = count > 0
+
+        self.view_failures_button.setVisible(available)
+        self.view_failures_button.setEnabled(available)
+
+        self.view_failures_button.setText(
+            f"View Failures ({count})" if available else "View Failures"
+        )
 
     def set_review_available(
         self,

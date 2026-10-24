@@ -241,6 +241,7 @@ class UpdateController(QObject):
     data_changed = Signal()
     error = Signal(str, str)
     item_failed = Signal(str)
+    failures_changed = Signal(object)
 
     def __init__(self, games, steam_api_key, parent=None):
         super().__init__(parent)
@@ -257,6 +258,8 @@ class UpdateController(QObject):
         self._combined_progress = {}
         self._combined_total = 0
         self._cancel_requested = False
+        self._failures = []
+        self._batch_completed = 0
 
         self._startup_refresh_active = False
         self._startup_steam_id = None
@@ -277,6 +280,24 @@ class UpdateController(QObject):
         self.games = games
 
         self.refresh_statuses()
+
+    def failures(self):
+        return list(self._failures)
+
+    def _reset_failures(self):
+        self._failures = []
+        self.failures_changed.emit([])
+
+    def _record_item_failure(self, source, message):
+        self._failures.append(
+            {
+                "source": source,
+                "message": message,
+            }
+        )
+
+        self.failures_changed.emit(self.failures())
+        self.item_failed.emit(message)
 
     def is_running(self):
         if self._library.is_running() or self._classification.is_running():
@@ -371,6 +392,7 @@ class UpdateController(QObject):
         if self.is_running():
             return "busy"
 
+        self._reset_failures()
         self._cancel_requested = False
         self._library_refresh_succeeded = False
 
@@ -415,8 +437,10 @@ class UpdateController(QObject):
         self._library_refresh_succeeded = False
         self.status_changed.emit("library", "Steam Library: Refresh failed")
 
+        failure_message = f"Steam library refresh failed: {message}"
+        self._record_item_failure("library", failure_message)
+
         if self._startup_refresh_active:
-            self.item_failed.emit(f"Startup Steam library refresh failed: {message}")
             return
 
         self.error.emit("Steam Library", f"Library refresh failed:\n{message}")
@@ -451,6 +475,7 @@ class UpdateController(QObject):
         if not self.games:
             return "nothing"
 
+        self._reset_failures()
         self._cancel_requested = False
 
         self.status_changed.emit("classification", "Steam Classification: Starting...")
@@ -473,8 +498,15 @@ class UpdateController(QObject):
         self.status_changed.emit(
             "classification", "Steam Classification: Refresh failed"
         )
+
+        self._record_item_failure(
+            "classification",
+            f"Steam classification failed: {message}",
+        )
+
         self.error.emit(
-            "Steam Classification", f"Steam classification failed:\n{message}"
+            "Steam Classification",
+            f"Steam classification failed:\n{message}",
         )
 
     def _classification_finished(self, was_cancelled):
@@ -594,39 +626,63 @@ class UpdateController(QObject):
         if self.is_running():
             return "busy"
 
+        self._reset_failures()
         self._cancel_requested = False
         self._batch_source = source
+        self._batch_completed = 0
 
         self.progress_changed.emit(source, 0, len(games), True)
 
         self._batch_thread = QThread()
-        self._batch_worker = BatchUpdateWorker(games, updater, task_name, action_text)
+        self._batch_worker = BatchUpdateWorker(
+            games,
+            updater,
+            task_name,
+            action_text,
+        )
 
         self._batch_worker.moveToThread(self._batch_thread)
         self._batch_thread.started.connect(self._batch_worker.run)
+
         self._batch_worker.status_changed.connect(
             lambda text: self.status_changed.emit(source, text)
         )
 
-        self._batch_worker.progress_changed.connect(
-            lambda completed, total: self.progress_changed.emit(
-                source, completed, total, True
+        self._batch_worker.progress_changed.connect(self._batch_progress)
+
+        self._batch_worker.item_failed.connect(
+            lambda message, source=source: self._record_item_failure(
+                source,
+                message,
             )
         )
-        self._batch_worker.item_failed.connect(self.item_failed.emit)
+
         self._batch_worker.finished.connect(self._batch_thread.quit)
         self._batch_worker.finished.connect(self._batch_worker.deleteLater)
 
         self._batch_thread.finished.connect(self._batch_finished)
         self._batch_thread.finished.connect(self._batch_thread.deleteLater)
+
         self._batch_thread.start()
         self.busy_changed.emit(True)
 
         return "started"
 
+    def _batch_progress(self, completed, total):
+        self._batch_completed = completed
+
+        self.progress_changed.emit(
+            self._batch_source,
+            completed,
+            total,
+            True,
+        )
+
     def _batch_finished(self):
         source = self._batch_source
         was_cancelled = self._cancel_requested
+        processed = self._batch_completed
+        failure_count = len(self._failures)
 
         if source is not None:
             self.progress_changed.emit(source, 0, 0, False)
@@ -634,14 +690,26 @@ class UpdateController(QObject):
         self._batch_worker = None
         self._batch_thread = None
         self._batch_source = None
+        self._batch_completed = 0
         self._cancel_requested = False
 
         self.data_changed.emit()
         self.refresh_statuses()
 
-        if was_cancelled and source is not None:
+        if source is not None and was_cancelled:
             self.status_changed.emit(
-                source, f"{self._source_title(source)}: Update cancelled"
+                source,
+                f"{self._source_title(source)}: Cancelled — "
+                f"{processed} processed, {failure_count} failed",
+            )
+
+        elif source is not None and failure_count:
+            succeeded = max(processed - failure_count, 0)
+
+            self.status_changed.emit(
+                source,
+                f"{self._source_title(source)}: Complete — "
+                f"{succeeded} succeeded, {failure_count} failed",
             )
 
         self.busy_changed.emit(self.is_running())
@@ -662,6 +730,7 @@ class UpdateController(QObject):
         if achievement_games and steam_id is None:
             return "steam_id_required"
 
+        self._reset_failures()
         self._cancel_requested = False
         self._combined_total = (
             len(hltb_games) + len(metadata_games) + len(achievement_games)
@@ -745,7 +814,9 @@ class UpdateController(QObject):
                 total,
             )
         )
-        worker.item_failed.connect(self.item_failed.emit)
+        worker.item_failed.connect(
+            lambda message, source=source: self._record_item_failure(source, message)
+        )
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(
@@ -781,27 +852,50 @@ class UpdateController(QObject):
 
     def _finish_combined(self):
         was_cancelled = self._cancel_requested
+        processed = sum(self._combined_progress.values())
+        failure_count = len(self._failures)
 
         for source in ("hltb", "metadata", "achievements"):
             self.progress_changed.emit(source, 0, 0, False)
 
         self.progress_changed.emit("all", 0, 0, False)
+
         self.data_changed.emit()
         self.refresh_statuses()
 
         remaining = sum(1 for game in self.games if not game.hltb_checked)
+
         remaining += sum(1 for game in self.games if not game.metadata_checked)
+
         remaining += sum(1 for game in self.games if not game.achievements_checked)
 
         if was_cancelled:
             self.status_changed.emit(
-                "all", f"Missing Data: Cancelled ({remaining} still unchecked)"
+                "all",
+                f"Missing Data: Cancelled — "
+                f"{processed} processed, "
+                f"{failure_count} failed, "
+                f"{remaining} still unchecked",
             )
+
+        elif failure_count:
+            self.status_changed.emit(
+                "all",
+                f"Missing Data: Complete with "
+                f"{failure_count} failures "
+                f"({remaining} still unchecked)",
+            )
+
         elif remaining == 0:
-            self.status_changed.emit("all", "Missing Data: Complete")
+            self.status_changed.emit(
+                "all",
+                "Missing Data: Complete",
+            )
+
         else:
             self.status_changed.emit(
-                "all", f"Missing Data: {remaining} still unchecked"
+                "all",
+                f"Missing Data: {remaining} still unchecked",
             )
 
         self._combined_progress = {}

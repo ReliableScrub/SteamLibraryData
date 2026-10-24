@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QStyleFactory,
     QTabWidget,
@@ -281,6 +282,10 @@ class MainWindow(QMainWindow):
 
         self.maintenance_tab.cancel_updates_button.clicked.connect(self.cancel_updates)
 
+        self.maintenance_tab.view_failures_button.clicked.connect(
+            self.show_update_failures
+        )
+
         self.maintenance_tab.change_steam_id_button.clicked.connect(
             self.change_steam_id
         )
@@ -316,6 +321,10 @@ class MainWindow(QMainWindow):
 
         self.update_controller.error.connect(self._show_update_error)
 
+        self.update_controller.failures_changed.connect(
+            self.maintenance_tab.set_failures
+        )
+
         self.update_controller.item_failed.connect(print)
 
     def _update_busy_state(self, busy):
@@ -332,6 +341,108 @@ class MainWindow(QMainWindow):
             title,
             message,
         )
+
+    def show_update_failures(self):
+        failures = self.update_controller.failures()
+
+        if not failures:
+            QMessageBox.information(
+                self,
+                "Update Failures",
+                "There are no failures from the most recent update.",
+            )
+            return
+
+        source_names = {
+            "library": "Steam Library",
+            "classification": "Steam Classification",
+            "hltb": "HLTB",
+            "metadata": "Genre / Tags",
+            "achievements": "Achievements",
+        }
+
+        grouped = {}
+
+        for failure in failures:
+            source = failure.get("source", "update")
+
+            grouped.setdefault(
+                source,
+                [],
+            ).append(failure.get("message", ""))
+
+        lines = []
+
+        for source in (
+            "library",
+            "classification",
+            "hltb",
+            "metadata",
+            "achievements",
+            "update",
+        ):
+            messages = grouped.pop(source, [])
+
+            if not messages:
+                continue
+
+            heading = source_names.get(
+                source,
+                source.title(),
+            )
+
+            lines.append(heading)
+            lines.append("-" * len(heading))
+
+            for message in messages:
+                lines.append(message)
+
+            lines.append("")
+
+        for source, messages in grouped.items():
+            heading = source_names.get(
+                source,
+                source.title(),
+            )
+
+            lines.append(heading)
+            lines.append("-" * len(heading))
+
+            for message in messages:
+                lines.append(message)
+
+            lines.append("")
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Failures")
+        dialog.resize(760, 480)
+
+        layout = QVBoxLayout(dialog)
+
+        heading = QLabel(
+            f"<b>{len(failures)} failure"
+            f"{'' if len(failures) == 1 else 's'} "
+            f"from the most recent update</b>"
+        )
+
+        layout.addWidget(heading)
+
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText("\n".join(lines).rstrip())
+
+        layout.addWidget(
+            details,
+            1,
+        )
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+
+        buttons.rejected.connect(dialog.reject)
+
+        layout.addWidget(buttons)
+
+        dialog.exec()
 
     def start_library_refresh(self):
         self.update_controller.start_library_refresh(self.steam_id)
