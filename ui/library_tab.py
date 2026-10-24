@@ -25,21 +25,18 @@ from PySide6.QtWidgets import (
 )
 
 from game_updates import (
-    apply_achievements,
-    apply_hltb,
-    apply_hltb_candidate,
-    apply_metadata,
-    fetch_achievements,
-    fetch_hltb,
-    fetch_metadata,
-    mark_hltb_no_match,
+    accept_hltb_candidate,
+    set_hltb_no_match,
+    update_achievements,
+    update_hltb,
+    update_metadata,
 )
 from storage.database import (
     clear_game_rating,
     get_game_rating,
     load_game_ratings,
     load_hltb_candidates,
-    save_game,
+    save_manual_status,
     set_game_rating,
 )
 from storage.image_cache import get_game_image
@@ -77,10 +74,10 @@ class SelectedGameRefreshWorker(QRunnable):
     def run(self):
         try:
             if self.source == "hltb":
-                result = fetch_hltb(self.game)
+                update_hltb(self.game)
 
             elif self.source == "metadata":
-                result = fetch_metadata(self.game)
+                update_metadata(self.game)
 
             elif self.source == "achievements":
                 if not self.steam_id:
@@ -91,7 +88,7 @@ class SelectedGameRefreshWorker(QRunnable):
                         "A Steam Web API key is required to refresh achievements."
                     )
 
-                result = fetch_achievements(
+                update_achievements(
                     self.game,
                     self.steam_id,
                     self.steam_api_key,
@@ -103,7 +100,7 @@ class SelectedGameRefreshWorker(QRunnable):
             self.signals.result_ready.emit(
                 self.source,
                 self.game,
-                result,
+                None,
             )
 
         except Exception as error:  # noqa: BLE001
@@ -166,31 +163,8 @@ class SelectedGameRefreshController(QObject):
         self,
         source,
         game,
-        result,
+        _result,
     ):
-        try:
-            if source == "hltb":
-                apply_hltb(game, result)
-
-            elif source == "metadata":
-                apply_metadata(game, result)
-
-            elif source == "achievements":
-                apply_achievements(game, result)
-
-            else:
-                raise ValueError(f"Unknown selected-game refresh source: {source}")
-
-            save_game(game)
-
-        except Exception as error:  # noqa: BLE001
-            self.failed.emit(
-                source,
-                game,
-                f"{type(error).__name__}: {error}",
-            )
-            return
-
         self.succeeded.emit(
             source,
             game,
@@ -1374,7 +1348,7 @@ class LibraryTab(QWidget):
         else:
             game.manual_status = selected_status
 
-        save_game(game)
+        save_manual_status(game)
         self.status_value.setText(game.effective_status())
         self.refresh_data()
 
@@ -1518,16 +1492,14 @@ class LibraryTab(QWidget):
             if candidate is None:
                 return
 
-            apply_hltb_candidate(game, candidate)
-            save_game(game)
+            accept_hltb_candidate(game, candidate)
 
             result["action"] = "accept"
 
             dialog.accept()
 
         def mark_no_match():
-            mark_hltb_no_match(game)
-            save_game(game)
+            set_hltb_no_match(game)
 
             result["action"] = "no_match"
 

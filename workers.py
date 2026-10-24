@@ -11,7 +11,6 @@ from api.steam_api import (
     get_owned_games,
 )
 from api.steamspy_api import SteamSpyError
-from storage.database import save_game
 
 
 def _format_worker_error(error):
@@ -194,7 +193,6 @@ class BatchUpdateWorker(QObject):
                     # Finish the current item cleanly even if
                     # cancellation is requested while it runs.
                     self.updater(game)
-                    save_game(game)
 
                 except Exception as error:  # noqa: BLE001
                     self.item_failed.emit(

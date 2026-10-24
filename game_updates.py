@@ -4,8 +4,9 @@ from api.achievements_api import get_achievement_progress
 from api.hltb_api import get_hltb_data
 from api.steamspy_api import get_game_metadata
 from storage.database import (
-    clear_hltb_candidates,
-    replace_hltb_candidates,
+    save_achievement_data,
+    save_hltb_data,
+    save_metadata_data,
 )
 
 
@@ -41,8 +42,6 @@ def apply_hltb_candidate(game, candidate):
     game.hltb_match_status = "matched"
     game.hltb_checked = True
 
-    clear_hltb_candidates(game.app_id)
-
 
 def apply_hltb(game, result):
     status = result["status"]
@@ -59,20 +58,11 @@ def apply_hltb(game, result):
     if status == "review":
         game.hltb_match_status = "review"
         game.hltb_checked = True
-
-        replace_hltb_candidates(
-            game.app_id,
-            result["candidates"],
-        )
-
         return
 
     if status == "no_match":
         game.hltb_match_status = "no_match"
         game.hltb_checked = True
-
-        clear_hltb_candidates(game.app_id)
-
         return
 
     raise ValueError(f"Unknown HLTB result status: {status}")
@@ -84,12 +74,74 @@ def mark_hltb_no_match(game):
     game.hltb_match_status = "no_match"
     game.hltb_checked = True
 
-    clear_hltb_candidates(game.app_id)
+
+def _hltb_state(game):
+    return (
+        game.hltb_main,
+        game.hltb_main_extra,
+        game.hltb_completionist,
+        game.hltb_all_styles,
+        game.hltb_match_name,
+        game.hltb_similarity,
+        game.hltb_game_id,
+        game.hltb_web_link,
+        game.hltb_match_status,
+        game.hltb_checked,
+    )
+
+
+def _restore_hltb_state(game, state):
+    (
+        game.hltb_main,
+        game.hltb_main_extra,
+        game.hltb_completionist,
+        game.hltb_all_styles,
+        game.hltb_match_name,
+        game.hltb_similarity,
+        game.hltb_game_id,
+        game.hltb_web_link,
+        game.hltb_match_status,
+        game.hltb_checked,
+    ) = state
 
 
 def update_hltb(game):
     result = fetch_hltb(game)
-    apply_hltb(game, result)
+    previous = _hltb_state(game)
+
+    try:
+        apply_hltb(game, result)
+
+        candidates = result.get("candidates", [])
+        save_hltb_data(game, candidates=candidates)
+
+    except Exception:
+        _restore_hltb_state(game, previous)
+        raise
+
+
+def accept_hltb_candidate(game, candidate):
+    previous = _hltb_state(game)
+
+    try:
+        apply_hltb_candidate(game, candidate)
+        save_hltb_data(game)
+
+    except Exception:
+        _restore_hltb_state(game, previous)
+        raise
+
+
+def set_hltb_no_match(game):
+    previous = _hltb_state(game)
+
+    try:
+        mark_hltb_no_match(game)
+        save_hltb_data(game)
+
+    except Exception:
+        _restore_hltb_state(game, previous)
+        raise
 
 
 def fetch_metadata(game):
@@ -117,7 +169,19 @@ def apply_metadata(game, result):
 
 def update_metadata(game):
     result = fetch_metadata(game)
-    apply_metadata(game, result)
+    previous_genres = list(game.genres)
+    previous_tags = dict(game.tags)
+    previous_checked = game.metadata_checked
+
+    try:
+        apply_metadata(game, result)
+        save_metadata_data(game)
+
+    except Exception:
+        game.genres = previous_genres
+        game.tags = previous_tags
+        game.metadata_checked = previous_checked
+        raise
 
 
 def fetch_achievements(game, steam_id, steam_api_key):
@@ -137,4 +201,24 @@ def apply_achievements(game, result):
 def update_achievements(game, steam_id, steam_api_key):
     result = fetch_achievements(game, steam_id, steam_api_key)
 
-    apply_achievements(game, result)
+    previous = (
+        game.achievement_total,
+        game.achievements_unlocked,
+        game.achievements_checked,
+        game.achievements_updated_at,
+        game.achievements_playtime_minutes,
+    )
+
+    try:
+        apply_achievements(game, result)
+        save_achievement_data(game)
+
+    except Exception:
+        (
+            game.achievement_total,
+            game.achievements_unlocked,
+            game.achievements_checked,
+            game.achievements_updated_at,
+            game.achievements_playtime_minutes,
+        ) = previous
+        raise

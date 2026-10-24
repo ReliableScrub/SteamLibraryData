@@ -3,12 +3,6 @@ from functools import partial
 from PySide6.QtCore import QObject, QThread, Signal
 
 from game_updates import (
-    apply_achievements,
-    apply_hltb,
-    apply_metadata,
-    fetch_achievements,
-    fetch_hltb,
-    fetch_metadata,
     update_achievements,
     update_hltb,
     update_metadata,
@@ -16,12 +10,11 @@ from game_updates import (
 from storage.database import (
     delete_games_not_in,
     save_game,
+    save_library_fields,
     save_steam_classifications,
 )
 from workers import (
     BatchUpdateWorker,
-    ConcurrentResultWorker,
-    ResultBatchWorker,
     SteamClassificationWorker,
     SteamLibraryRefreshWorker,
 )
@@ -213,7 +206,7 @@ class SteamLibraryRefreshController(QObject):
                 existing_game.last_played_timestamp = steam_game.last_played_timestamp
 
                 if changed:
-                    save_game(existing_game)
+                    save_library_fields(existing_game)
 
                 merged_games.append(existing_game)
 
@@ -691,32 +684,28 @@ class UpdateController(QObject):
             self._start_combined_source(
                 source="hltb",
                 games=hltb_games,
-                fetcher=fetch_hltb,
-                applier=apply_hltb,
+                updater=update_hltb,
                 action_text="Searching HLTB for",
-                concurrent=True,
             )
 
         if metadata_games:
             self._start_combined_source(
                 source="metadata",
                 games=metadata_games,
-                fetcher=fetch_metadata,
-                applier=apply_metadata,
+                updater=update_metadata,
                 action_text="Getting metadata for",
             )
 
         if achievement_games:
             steam_api_key = self.steam_api_key
 
-            def achievement_fetcher(game):
-                return fetch_achievements(game, steam_id, steam_api_key)
+            def achievement_updater(game):
+                update_achievements(game, steam_id, steam_api_key)
 
             self._start_combined_source(
                 source="achievements",
                 games=achievement_games,
-                fetcher=achievement_fetcher,
-                applier=apply_achievements,
+                updater=achievement_updater,
                 action_text="Checking achievements for",
             )
 
@@ -725,18 +714,21 @@ class UpdateController(QObject):
         return "started"
 
     def _start_combined_source(
-        self, source, games, fetcher, applier, action_text, concurrent=False
+        self,
+        source,
+        games,
+        updater,
+        action_text,
     ):
         self.progress_changed.emit(source, 0, len(games), True)
 
         thread = QThread()
-
-        if concurrent:
-            worker = ConcurrentResultWorker(
-                games, fetcher, source, action_text, max_workers=1
-            )
-        else:
-            worker = ResultBatchWorker(games, fetcher, source, action_text)
+        worker = BatchUpdateWorker(
+            games,
+            updater,
+            self._source_title(source),
+            action_text,
+        )
 
         self._combined_threads[source] = thread
         self._combined_workers[source] = worker
@@ -746,27 +738,25 @@ class UpdateController(QObject):
         worker.status_changed.connect(
             lambda text, source=source: self.status_changed.emit(source, text)
         )
-
-        worker.progress_changed.connect(self._combined_source_progress)
-        worker.result_ready.connect(
-            partial(self._apply_combined_result, source, applier)
+        worker.progress_changed.connect(
+            lambda completed, total, source=source: self._combined_source_progress(
+                source,
+                completed,
+                total,
+            )
         )
         worker.item_failed.connect(self.item_failed.emit)
         worker.finished.connect(thread.quit)
-
         worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(partial(self._combined_thread_finished, source, thread))
+        thread.finished.connect(
+            partial(
+                self._combined_thread_finished,
+                source,
+                thread,
+            )
+        )
         thread.finished.connect(thread.deleteLater)
         thread.start()
-
-    def _apply_combined_result(self, source, applier, game, result):
-        try:
-            applier(game, result)
-            save_game(game)
-        except Exception as error:  # noqa: BLE001
-            self.item_failed.emit(
-                f"{self._source_title(source)} failed for {game.name}: {type(error).__name__}: {error}"
-            )
 
     def _combined_source_progress(self, source, completed, total):
         self._combined_progress[source] = completed

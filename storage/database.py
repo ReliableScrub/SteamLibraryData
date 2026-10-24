@@ -11,6 +11,7 @@ from storage.paths import DB_FILE
 def get_connection():
     connection = sqlite3.connect(DB_FILE)
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 30000")
 
     try:
         with connection:
@@ -246,6 +247,227 @@ def save_game(game):
                 "INSERT OR REPLACE INTO game_tags (app_id, tag_id, weight) VALUES (?, ?, ?)",
                 (game.app_id, tag_id, weight),
             )
+
+
+def _require_game_row(cursor, game):
+    if cursor.rowcount != 1:
+        raise RuntimeError(f"Could not save AppID {game.app_id}: game not found.")
+
+
+def save_library_fields(game):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE games
+            SET
+                name = ?,
+                playtime_minutes = ?,
+                playtime_2weeks_minutes = ?,
+                last_played_timestamp = ?
+            WHERE app_id = ?
+            """,
+            (
+                game.name,
+                game.playtime_minutes,
+                game.playtime_2weeks_minutes,
+                game.last_played_timestamp,
+                game.app_id,
+            ),
+        )
+
+        _require_game_row(cursor, game)
+
+
+def save_hltb_data(game, candidates=None):
+    if candidates is None:
+        candidates = []
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE games
+            SET
+                hltb_main = ?,
+                hltb_main_extra = ?,
+                hltb_completionist = ?,
+                hltb_all_styles = ?,
+                hltb_match_name = ?,
+                hltb_similarity = ?,
+                hltb_game_id = ?,
+                hltb_web_link = ?,
+                hltb_match_status = ?,
+                hltb_checked = ?
+            WHERE app_id = ?
+            """,
+            (
+                game.hltb_main,
+                game.hltb_main_extra,
+                game.hltb_completionist,
+                game.hltb_all_styles,
+                game.hltb_match_name,
+                game.hltb_similarity,
+                game.hltb_game_id,
+                game.hltb_web_link,
+                game.hltb_match_status,
+                int(game.hltb_checked),
+                game.app_id,
+            ),
+        )
+
+        _require_game_row(cursor, game)
+
+        connection.execute(
+            "DELETE FROM hltb_candidates WHERE app_id = ?",
+            (game.app_id,),
+        )
+
+        if game.hltb_match_status != "review":
+            return
+
+        for candidate in candidates:
+            game_id = candidate.get("game_id")
+
+            if game_id is None:
+                continue
+
+            connection.execute(
+                """
+                INSERT INTO hltb_candidates (
+                    app_id,
+                    hltb_game_id,
+                    game_name,
+                    game_web_link,
+                    main_story,
+                    main_extra,
+                    completionist,
+                    all_styles,
+                    similarity,
+                    search_query
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    game.app_id,
+                    game_id,
+                    candidate["game_name"],
+                    candidate.get("game_web_link"),
+                    candidate.get("main_story"),
+                    candidate.get("main_extra"),
+                    candidate.get("completionist"),
+                    candidate.get("all_styles"),
+                    candidate.get("similarity"),
+                    candidate.get("search_query"),
+                ),
+            )
+
+
+def save_metadata_data(game):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE games
+            SET metadata_checked = ?
+            WHERE app_id = ?
+            """,
+            (
+                int(game.metadata_checked),
+                game.app_id,
+            ),
+        )
+
+        _require_game_row(cursor, game)
+
+        connection.execute(
+            "DELETE FROM game_genres WHERE app_id = ?",
+            (game.app_id,),
+        )
+
+        for genre in game.genres:
+            connection.execute(
+                "INSERT OR IGNORE INTO genres (name) VALUES (?)",
+                (genre,),
+            )
+
+            genre_id = connection.execute(
+                "SELECT genre_id FROM genres WHERE name = ?",
+                (genre,),
+            ).fetchone()[0]
+
+            connection.execute(
+                "INSERT OR IGNORE INTO game_genres (app_id, genre_id) VALUES (?, ?)",
+                (
+                    game.app_id,
+                    genre_id,
+                ),
+            )
+
+        connection.execute(
+            "DELETE FROM game_tags WHERE app_id = ?",
+            (game.app_id,),
+        )
+
+        for tag, weight in game.tags.items():
+            connection.execute(
+                "INSERT OR IGNORE INTO tags (name) VALUES (?)",
+                (tag,),
+            )
+
+            tag_id = connection.execute(
+                "SELECT tag_id FROM tags WHERE name = ?",
+                (tag,),
+            ).fetchone()[0]
+
+            connection.execute(
+                "INSERT OR REPLACE INTO game_tags (app_id, tag_id, weight) VALUES (?, ?, ?)",
+                (
+                    game.app_id,
+                    tag_id,
+                    weight,
+                ),
+            )
+
+
+def save_achievement_data(game):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE games
+            SET
+                achievement_total = ?,
+                achievements_unlocked = ?,
+                achievements_checked = ?,
+                achievements_updated_at = ?,
+                achievements_playtime_minutes = ?
+            WHERE app_id = ?
+            """,
+            (
+                game.achievement_total,
+                game.achievements_unlocked,
+                int(game.achievements_checked),
+                game.achievements_updated_at,
+                game.achievements_playtime_minutes,
+                game.app_id,
+            ),
+        )
+
+        _require_game_row(cursor, game)
+
+
+def save_manual_status(game):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE games
+            SET manual_status = ?
+            WHERE app_id = ?
+            """,
+            (
+                game.manual_status,
+                game.app_id,
+            ),
+        )
+
+        _require_game_row(cursor, game)
 
 
 def save_steam_classifications(classifications):
