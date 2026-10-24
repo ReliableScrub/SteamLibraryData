@@ -1,4 +1,5 @@
 import random
+import time
 from datetime import UTC, datetime
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSplitter,
     QTableView,
     QVBoxLayout,
@@ -304,6 +306,78 @@ class LibraryTab(QWidget):
 
         self.pick_button = QPushButton("Pick Something For Me")
 
+        self.advanced_toggle_button = QPushButton("Advanced Filters ▸")
+        self.advanced_toggle_button.setCheckable(True)
+
+        self.advanced_clear_button = QPushButton("Clear Advanced")
+
+        self.achievement_filter = QComboBox()
+        self.achievement_filter.addItems(
+            [
+                "Any",
+                "Has achievements",
+                "No achievements",
+                "100% unlocked",
+                "At least % unlocked",
+                "Remaining at most",
+            ]
+        )
+
+        self.achievement_percent_label = QLabel("Percent:")
+        self.achievement_percent_filter = QSpinBox()
+        self.achievement_percent_filter.setRange(1, 100)
+        self.achievement_percent_filter.setValue(75)
+        self.achievement_percent_filter.setSuffix("%")
+
+        self.achievement_remaining_label = QLabel("Remaining:")
+        self.achievement_remaining_filter = QSpinBox()
+        self.achievement_remaining_filter.setRange(0, 9999)
+        self.achievement_remaining_filter.setValue(5)
+
+        self.playtime_hltb_filter = QComboBox()
+        self.playtime_hltb_filter.addItems(
+            [
+                "Any",
+                "At least Main Story",
+                "At least Main + Extra",
+                "At least Completionist",
+                "Custom % of Completionist",
+            ]
+        )
+        self.playtime_hltb_filter.setToolTip(
+            "Compare total Steam playtime against the selected HLTB time."
+        )
+
+        self.playtime_hltb_percent_label = QLabel("Completionist %:")
+        self.playtime_hltb_percent_filter = QSpinBox()
+        self.playtime_hltb_percent_filter.setRange(1, 500)
+        self.playtime_hltb_percent_filter.setValue(80)
+        self.playtime_hltb_percent_filter.setSuffix("%")
+
+        self.last_played_filter = QComboBox()
+        self.last_played_filter.addItems(
+            [
+                "Any",
+                "Never",
+                "Within 30 days",
+                "Within 90 days",
+                "Within 1 year",
+                "More than 1 year ago",
+            ]
+        )
+
+        self.data_completeness_filter = QComboBox()
+        self.data_completeness_filter.addItems(
+            [
+                "Any",
+                "All enrichment checked",
+                "Missing any enrichment",
+                "Missing HLTB",
+                "Missing Genre / Tags",
+                "Missing Achievements",
+            ]
+        )
+
     def _create_table(self):
         self.table = QTableView()
         self.game_table_model = GameTableModel(self.filtered_games, self)
@@ -518,8 +592,51 @@ class LibraryTab(QWidget):
         self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([650, 450])
 
+        advanced_header_row = QHBoxLayout()
+        advanced_header_row.addWidget(self.advanced_toggle_button)
+        advanced_header_row.addWidget(self.advanced_clear_button)
+        advanced_header_row.addStretch()
+
+        self.advanced_panel = QFrame()
+        advanced_layout = QVBoxLayout(self.advanced_panel)
+        advanced_layout.setContentsMargins(12, 4, 12, 8)
+        advanced_layout.setSpacing(6)
+
+        achievement_row = QHBoxLayout()
+        achievement_row.addWidget(QLabel("Achievements:"))
+        achievement_row.addWidget(self.achievement_filter)
+        achievement_row.addWidget(self.achievement_percent_label)
+        achievement_row.addWidget(self.achievement_percent_filter)
+        achievement_row.addWidget(self.achievement_remaining_label)
+        achievement_row.addWidget(self.achievement_remaining_filter)
+        achievement_row.addStretch()
+
+        playtime_row = QHBoxLayout()
+        playtime_row.addWidget(QLabel("Playtime vs HLTB:"))
+        playtime_row.addWidget(self.playtime_hltb_filter)
+        playtime_row.addWidget(self.playtime_hltb_percent_label)
+        playtime_row.addWidget(self.playtime_hltb_percent_filter)
+        playtime_row.addStretch()
+
+        other_row = QHBoxLayout()
+        other_row.addWidget(QLabel("Last played:"))
+        other_row.addWidget(self.last_played_filter)
+        other_row.addSpacing(12)
+        other_row.addWidget(QLabel("Data completeness:"))
+        other_row.addWidget(self.data_completeness_filter)
+        other_row.addStretch()
+
+        advanced_layout.addLayout(achievement_row)
+        advanced_layout.addLayout(playtime_row)
+        advanced_layout.addLayout(other_row)
+
+        self.advanced_panel.setVisible(False)
+        self._update_advanced_filter_controls()
+
         layout.addLayout(search_row)
         layout.addLayout(filter_row)
+        layout.addLayout(advanced_header_row)
+        layout.addWidget(self.advanced_panel)
         layout.addWidget(self.splitter, 1)
 
     def _connect_signals(self):
@@ -572,6 +689,31 @@ class LibraryTab(QWidget):
 
         self.splitter.splitterMoved.connect(self.update_media_sizes)
         self.rating_filter.currentTextChanged.connect(self.apply_filters)
+
+        self.advanced_toggle_button.toggled.connect(self._advanced_expanded_changed)
+        self.advanced_clear_button.clicked.connect(self.clear_advanced_filters)
+
+        self.achievement_filter.currentTextChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.achievement_percent_filter.valueChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.achievement_remaining_filter.valueChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.playtime_hltb_filter.currentTextChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.playtime_hltb_percent_filter.valueChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.last_played_filter.currentTextChanged.connect(
+            self._advanced_filter_changed
+        )
+        self.data_completeness_filter.currentTextChanged.connect(
+            self._advanced_filter_changed
+        )
 
         self._update_selected_refresh_enabled()
 
@@ -632,6 +774,59 @@ class LibraryTab(QWidget):
         if isinstance(hltb_max, (int, float)):
             self.hltb_max_filter.setValue(hltb_max)
 
+        advanced = settings.get("advanced_filters")
+
+        if isinstance(advanced, dict):
+            combo_settings = [
+                (
+                    self.achievement_filter,
+                    advanced.get("achievement_mode"),
+                ),
+                (
+                    self.playtime_hltb_filter,
+                    advanced.get("playtime_hltb_mode"),
+                ),
+                (
+                    self.last_played_filter,
+                    advanced.get("last_played_mode"),
+                ),
+                (
+                    self.data_completeness_filter,
+                    advanced.get("data_completeness_mode"),
+                ),
+            ]
+
+            for combo, value in combo_settings:
+                if not isinstance(value, str):
+                    continue
+
+                index = combo.findText(value)
+
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+            achievement_percent = advanced.get("achievement_percent")
+            achievement_remaining = advanced.get("achievement_remaining")
+            playtime_hltb_percent = advanced.get("playtime_hltb_percent")
+
+            if isinstance(achievement_percent, int):
+                self.achievement_percent_filter.setValue(achievement_percent)
+
+            if isinstance(achievement_remaining, int):
+                self.achievement_remaining_filter.setValue(achievement_remaining)
+
+            if isinstance(playtime_hltb_percent, int):
+                self.playtime_hltb_percent_filter.setValue(playtime_hltb_percent)
+
+            expanded = advanced.get("expanded") is True
+            self.advanced_toggle_button.setChecked(expanded)
+            self.advanced_panel.setVisible(expanded)
+            self.advanced_toggle_button.setText(
+                "Advanced Filters ▾" if expanded else "Advanced Filters ▸"
+            )
+
+        self._update_advanced_filter_controls()
+
         sort_column = settings.get("sort_column")
 
         if (
@@ -660,6 +855,22 @@ class LibraryTab(QWidget):
                 "hltb_metric": self.hltb_metric_filter.currentText(),
                 "hltb_min": self.hltb_min_filter.value(),
                 "hltb_max": self.hltb_max_filter.value(),
+                "advanced_filters": {
+                    "expanded": self.advanced_toggle_button.isChecked(),
+                    "achievement_mode": self.achievement_filter.currentText(),
+                    "achievement_percent": self.achievement_percent_filter.value(),
+                    "achievement_remaining": (
+                        self.achievement_remaining_filter.value()
+                    ),
+                    "playtime_hltb_mode": self.playtime_hltb_filter.currentText(),
+                    "playtime_hltb_percent": (
+                        self.playtime_hltb_percent_filter.value()
+                    ),
+                    "last_played_mode": self.last_played_filter.currentText(),
+                    "data_completeness_mode": (
+                        self.data_completeness_filter.currentText()
+                    ),
+                },
                 "sort_column": self.header_sort_column,
                 "sort_order": (
                     "descending"
@@ -672,6 +883,203 @@ class LibraryTab(QWidget):
     def _library_filter_changed(self):
         self.apply_filters()
         self._save_library_view()
+
+    def _advanced_expanded_changed(self, expanded):
+        self.advanced_panel.setVisible(expanded)
+        self.advanced_toggle_button.setText(
+            "Advanced Filters ▾" if expanded else "Advanced Filters ▸"
+        )
+        self._save_library_view()
+
+    def _advanced_filter_changed(self, *_):
+        self._update_advanced_filter_controls()
+        self.apply_filters()
+        self._save_library_view()
+
+    def _update_advanced_filter_controls(self):
+        achievement_mode = self.achievement_filter.currentText()
+        uses_percent = achievement_mode == "At least % unlocked"
+        uses_remaining = achievement_mode == "Remaining at most"
+
+        self.achievement_percent_label.setEnabled(uses_percent)
+        self.achievement_percent_filter.setEnabled(uses_percent)
+        self.achievement_remaining_label.setEnabled(uses_remaining)
+        self.achievement_remaining_filter.setEnabled(uses_remaining)
+
+        custom_hltb = (
+            self.playtime_hltb_filter.currentText() == "Custom % of Completionist"
+        )
+
+        self.playtime_hltb_percent_label.setEnabled(custom_hltb)
+        self.playtime_hltb_percent_filter.setEnabled(custom_hltb)
+
+    def clear_advanced_filters(self):
+        controls = [
+            self.achievement_filter,
+            self.achievement_percent_filter,
+            self.achievement_remaining_filter,
+            self.playtime_hltb_filter,
+            self.playtime_hltb_percent_filter,
+            self.last_played_filter,
+            self.data_completeness_filter,
+        ]
+
+        for control in controls:
+            control.blockSignals(True)
+
+        try:
+            self.achievement_filter.setCurrentText("Any")
+            self.achievement_percent_filter.setValue(75)
+            self.achievement_remaining_filter.setValue(5)
+            self.playtime_hltb_filter.setCurrentText("Any")
+            self.playtime_hltb_percent_filter.setValue(80)
+            self.last_played_filter.setCurrentText("Any")
+            self.data_completeness_filter.setCurrentText("Any")
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
+        self._update_advanced_filter_controls()
+        self.apply_filters()
+        self._save_library_view()
+
+    def _matches_achievement_filter(self, game):
+        mode = self.achievement_filter.currentText()
+
+        if mode == "Any":
+            return True
+
+        if not game.achievements_checked:
+            return False
+
+        total = game.achievement_total
+        unlocked = game.achievements_unlocked
+
+        if total is None or unlocked is None:
+            return False
+
+        if mode == "Has achievements":
+            return total > 0
+
+        if mode == "No achievements":
+            return total == 0
+
+        if mode == "100% unlocked":
+            return total > 0 and unlocked >= total
+
+        if mode == "At least % unlocked":
+            if total <= 0:
+                return False
+
+            percent = (unlocked / total) * 100
+            return percent >= self.achievement_percent_filter.value()
+
+        if mode == "Remaining at most":
+            if total <= 0:
+                return False
+
+            remaining = max(total - unlocked, 0)
+            return remaining <= self.achievement_remaining_filter.value()
+
+        return True
+
+    def _matches_playtime_hltb_filter(self, game):
+        mode = self.playtime_hltb_filter.currentText()
+
+        if mode == "Any":
+            return True
+
+        playtime_hours = (game.playtime_minutes or 0) / 60
+
+        if mode == "At least Main Story":
+            target = game.hltb_main
+
+        elif mode == "At least Main + Extra":
+            target = game.hltb_main_extra
+
+        elif mode == "At least Completionist":
+            target = game.hltb_completionist
+
+        elif mode == "Custom % of Completionist":
+            completionist = game.hltb_completionist
+
+            if completionist is None or completionist <= 0:
+                return False
+
+            target = completionist * (self.playtime_hltb_percent_filter.value() / 100)
+
+        else:
+            return True
+
+        if target is None or target <= 0:
+            return False
+
+        return playtime_hours >= target
+
+    def _matches_last_played_filter(self, game, now):
+        mode = self.last_played_filter.currentText()
+
+        if mode == "Any":
+            return True
+
+        timestamp = game.last_played_timestamp or 0
+
+        if mode == "Never":
+            return timestamp <= 0
+
+        if timestamp <= 0:
+            return False
+
+        day = 24 * 60 * 60
+
+        if mode == "Within 30 days":
+            return timestamp >= now - (30 * day)
+
+        if mode == "Within 90 days":
+            return timestamp >= now - (90 * day)
+
+        if mode == "Within 1 year":
+            return timestamp >= now - (365 * day)
+
+        if mode == "More than 1 year ago":
+            return timestamp < now - (365 * day)
+
+        return True
+
+    def _matches_data_completeness_filter(self, game):
+        mode = self.data_completeness_filter.currentText()
+
+        if mode == "Any":
+            return True
+
+        all_checked = (
+            game.hltb_checked and game.metadata_checked and game.achievements_checked
+        )
+
+        if mode == "All enrichment checked":
+            return all_checked
+
+        if mode == "Missing any enrichment":
+            return not all_checked
+
+        if mode == "Missing HLTB":
+            return not game.hltb_checked
+
+        if mode == "Missing Genre / Tags":
+            return not game.metadata_checked
+
+        if mode == "Missing Achievements":
+            return not game.achievements_checked
+
+        return True
+
+    def _matches_advanced_filters(self, game, now):
+        return (
+            self._matches_achievement_filter(game)
+            and self._matches_playtime_hltb_filter(game)
+            and self._matches_last_played_filter(game, now)
+            and self._matches_data_completeness_filter(game)
+        )
 
     def hltb_min_changed(self, min_hours):
         max_hours = self.hltb_max_filter.value()
@@ -789,7 +1197,14 @@ class LibraryTab(QWidget):
                     if ratings.get(game.app_id) == rating_value
                 ]
 
-        # 6. SEARCH
+        # 6. ADVANCED FILTERS
+        now = time.time()
+
+        filtered_games = [
+            game for game in filtered_games if self._matches_advanced_filters(game, now)
+        ]
+
+        # 7. SEARCH
         search_text = self.search_box.text().strip().lower()
 
         if search_text:
@@ -797,7 +1212,7 @@ class LibraryTab(QWidget):
                 game for game in filtered_games if search_text in game.name.lower()
             ]
 
-        # 7. SORT
+        # 8. SORT
         if self.header_sort_column is not None:
             filtered_games = self.sort_games_by_column(filtered_games)
         else:
@@ -806,13 +1221,8 @@ class LibraryTab(QWidget):
                 key=lambda game: game.name.lower(),
             )
 
+        # 9. PUSH RESULT INTO TABLE
         self.filtered_games = filtered_games
-
-        self.game_table_model.set_games(filtered_games)
-
-        # 8. PUSH RESULT INTO TABLE
-        self.filtered_games = filtered_games
-
         self.game_table_model.set_games(filtered_games)
 
     def show_selected_game(self):
