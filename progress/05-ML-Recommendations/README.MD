@@ -2,36 +2,34 @@
 
 Phase 5 adds local personalized recommendations for games already present in the user's Steam library.
 
-The production model is a hybrid content-based recommender using local K-Means taste clustering, with a simpler content-based fallback when there is not enough positive history for clustering.
+The production recommender is a hybrid content-based system built from Steam genres, SteamSpy tags, user feedback, and local K-Means taste clustering. For smaller recommendation histories, it automatically falls back to a simpler content-based model.
 
 ## Completed
 
 - Added persistent 1-5 star enjoyment ratings
-- Added recommendation-specific database tables
-- Added bulk recommendation data loading
-- Added sparse content vectors from Steam genres and SteamSpy tags
-- Added IDF and SteamSpy tag-strength weighting
-- Added cosine similarity for game comparison
+- Added recommendation-specific database tables and bulk data loading
+- Added weighted sparse content vectors from Steam genres and SteamSpy tags
+- Added IDF weighting, SteamSpy tag-strength weighting, and cosine similarity
 - Added explicit, manual, and implicit feedback modeling
 - Added a learned user preference profile
-- Added nearest-positive-game similarity
+- Added feedback-weighted positive-neighborhood matching
 - Added sparse-match support adjustment
-- Added a hybrid content-based baseline
-- Added repeatable five-fold holdout evaluation
-- Evaluated several local ML approaches
-- Selected K-Means after it clearly outperformed the tested alternatives
-- Evaluated multiple K-Means cluster counts
-- Selected five clusters for the current development library
-- Added real-library recommendation and cluster audits
-- Added persistent generated recommendation results
-- Added recommendation explanations
+- Added an adaptive K-Means taste-clustering model
+- Added a content-based fallback for smaller recommendation histories
+- Evaluated multiple local ML approaches and clustering configurations
+- Added repeatable holdout evaluation for recommendation quality
+- Added persisted recommendation builds and explanations
 - Added a dedicated Recommendations tab
 - Added personalized **For You** recommendations
-- Added reusable type, genre, tag, and HLTB filtering
 - Added **Similar to a Game** content-similarity search
-- Added Steam artwork, Store links, HLTB data, and embedded trailers to recommendation details
+- Added type, genre, tag, and HLTB filtering
+- Added recommendation diversification to avoid overly repetitive result sets
+- Added Steam artwork, Store access, HLTB data, and embedded trailers
+- Added responsive, scrollable recommendation detail panels
+- Added recommendation and Phase 5 regression audits
+- Consolidated recommendation tests and diagnostic tools
 
-Existing Steam, SteamSpy, HLTB, achievement, and classification systems remain separate from the recommendation model.
+Existing Steam, SteamSpy, HLTB, achievement, and classification systems remain separate from the recommendation model and provide data to it where appropriate.
 
 ## Recommendation Data
 
@@ -44,99 +42,117 @@ Content features currently come from:
 
 Preference evidence may come from:
 
-- explicit star ratings
-- manual status
+- explicit 1-5 star ratings
+- manual game status
 - total playtime
 - playtime relative to HLTB estimates
 - achievement progress
 
 Explicit ratings are treated as stronger evidence than inferred behavior.
 
-Missing metadata is treated as missing evidence rather than negative evidence.
-
-Unplayed games do not generate implicit preference feedback.
+Missing metadata is treated as missing evidence rather than negative evidence, and unplayed games do not generate implicit preference feedback.
 
 ## Database Additions
 
 Phase 5 adds:
 
-- `game_ratings` - persistent 1-5 star ratings
-- `recommendation_state` - information about the current recommendation build
-- `game_recommendations` - generated recommendation results and explanations
+- `game_ratings` - persistent 1-5 star user ratings
+- `recommendation_state` - metadata describing the current recommendation build
+- `game_recommendations` - generated scores, match tiers, and explanation data
 
 Ratings are persistent user data.
 
-Generated recommendations are derived data and can be rebuilt whenever relevant inputs change.
+Generated recommendations are derived data and can be rebuilt whenever relevant library data or ratings change.
 
 ## Recommendation Model
 
-Games are represented as weighted sparse vectors built from genres and SteamSpy tags.
+Games are represented as sparse weighted feature vectors.
 
-Feature weighting includes:
+Feature processing includes:
 
+- Steam genre features
+- SteamSpy tag features
 - smoothed inverse document frequency
 - normalized SteamSpy tag strength
 - square-root softening of tag weights
 - L2 normalization
 
-Cosine similarity is used for game-content comparison.
+Cosine similarity is used to compare game-content vectors.
 
-The original content baseline combines:
+The recommender also builds a feedback-weighted positive neighborhood from games the user has played and shown positive evidence toward. Sparse matches are support-adjusted so that a near-perfect match on only one or two weakly shared features does not dominate a stronger multi-feature match.
 
-`0.50 * global preference similarity + 0.50 * nearest-positive similarity`
+### Smaller histories
 
-This remains useful as both a benchmark and a fallback.
+When there is not enough suitable positive history for clustering, recommendations use:
 
-For users with enough positive recommendation history, the production recommender instead uses K-Means to represent multiple areas of positive taste:
+```text
+global preference profile
++ feedback-weighted positive neighborhood
+-> recommendation ranking
+```
 
-`content features -> positive feedback -> K-Means taste clusters -> cluster similarity + nearest-positive similarity -> ranking`
+### Larger histories
 
-For users without enough suitable history:
+With enough positive history, the recommender trains local K-Means taste clusters:
 
-`content features -> global preference profile + nearest-positive similarity -> ranking`
+```text
+content features
+-> positive feedback
+-> K-Means taste clusters
+-> cluster similarity + positive-neighborhood similarity
+-> recommendation ranking
+```
 
-Five clusters currently perform best on the development library.
+The number of clusters is selected adaptively from the amount of usable positive history, up to five clusters.
+
+This allows the model to represent multiple areas of taste instead of forcing all preferences into one global profile.
 
 ## ML Evaluation
 
-The recommendation system was evaluated using repeatable five-fold holdout testing.
+Recommendation changes are evaluated using repeatable holdout testing against the user's real library data.
 
-Tested approaches included:
+Approaches evaluated during Phase 5 included:
 
+- content-based preference profiles
+- nearest-positive and multi-neighbor similarity
 - Ridge regression
 - Truncated SVD
 - K-Means clustering
 - One-Class SVM
 - Gaussian Mixture modeling
+- multiple K-Means cluster counts
+- multiple positive-neighborhood sizes
 
-K-Means was the only tested ML approach that clearly and consistently improved recommendation quality over the content baseline.
+K-Means was retained because it produced the clearest improvement over the simpler content baseline while remaining deterministic, local, explainable, and relatively lightweight.
 
-The other approaches were rejected rather than retained simply for additional model complexity.
+Experimental approaches that did not improve results were removed rather than retained only for additional model complexity.
 
 ## Recommendations UI
 
-The Recommendations tab currently provides two modes.
+The Recommendations tab provides two modes.
 
 ### For You
 
-Displays up to ten personalized recommendations from the saved recommendation build.
+Displays up to ten personalized games selected from the saved recommendation build.
 
 The view includes:
 
 - recommendation match strength
-- explanation of major taste traits
+- major taste traits
 - supporting games previously played
 - shared traits
 - HLTB estimates
 - Steam type
-- artwork
+- Steam artwork
 - Steam Store access
 - embedded trailers
 - type, genre, tag, and HLTB filters
 
-Filters narrow the existing recommendation pool without retraining the model.
+Filters narrow the saved recommendation pool without rebuilding or retraining the recommendation model.
 
-A small diversification step is used when choosing the displayed recommendations so the list is not dominated by nearly identical games.
+A diversification pass is applied when selecting the displayed shortlist so that closely related games do not unnecessarily dominate the entire page.
+
+The media/detail area is vertically scrollable so artwork, HLTB information, trailers, navigation, and Store controls remain usable at smaller window heights.
 
 ### Similar to a Game
 
@@ -146,40 +162,148 @@ The view includes:
 
 - similarity strength
 - shared traits
-- HLTB data
+- HLTB information
 - artwork
-- Store access
+- Steam Store access
 - embedded trailers
+- the same reusable recommendation filters
 
-This mode uses genre/tag content similarity rather than the user's full personalized taste profile.
+This mode uses genre/tag content similarity rather than the user's personalized recommendation profile.
 
 ## Testing
 
-Phase 5 includes:
+The test suite is organized around behavior rather than individual implementation constants.
 
-- unit tests for content features
-- unit tests for feedback calculations
-- unit tests for preference-profile behavior
-- unit tests for baseline ranking
-- unit tests for K-Means clustering
-- recommendation pipeline smoke tests
-- profile and baseline audits
-- five-fold recommendation evaluation
-- cluster-count evaluation
-- cluster-content inspection
-- real-library recommendation audits
+Current coverage includes:
 
-Recommendation changes are evaluated with repeatable holdout metrics rather than judged only from individual examples.
+- database and rating persistence
+- Steam API parsing
+- content-vector construction
+- feedback calculations
+- preference-profile behavior
+- positive-neighborhood matching
+- Similar to a Game ranking
+- baseline recommendation behavior
+- K-Means clustering
+- diversification
+- recommendation explanations
+- recommendation-engine integration
+- Maintenance and Recommendations UI regression checks
 
-## Remaining things to do
+Run the complete automated test suite with:
 
-The recommendation model itself is largely complete.
+```powershell
+pytest
+```
 
-Remaining Phase 5 work is mainly UI and edge-case polish:
+For verbose output:
 
-- better empty states when there are no recommendations
-- clearer handling when filters remove every result
-- better handling when Similar to a Game lacks usable metadata
-- responsive layout improvements for large window sizes
-- permanent trailer-preview space so the layout does not shift when playback starts
-- final recommendation UI cleanup
+```powershell
+pytest -v
+```
+
+## Audits and Evaluation
+
+Phase 5 also includes real-library diagnostics that complement the isolated pytest suite.
+
+### Database and Phase 5 health
+
+```powershell
+python -m tools.phase5_audit
+```
+
+Checks database integrity, classifications, update coverage, HLTB state, achievements, metadata mappings, ratings, and saved recommendation state.
+
+### Production recommendation audit
+
+```powershell
+python -m tools.recommendation_audit
+```
+
+Builds recommendations in memory and checks ranking integrity, explanations, supporting-game references, top picks, and other production invariants.
+
+An optional diversification preview can also be requested:
+
+```powershell
+python -m tools.recommendation_audit --diversity-weight 0.85
+```
+
+### Recommendation evaluation
+
+History-size evaluation:
+
+```powershell
+python -m tools.recommendation_evaluation history
+```
+
+Positive-neighborhood evaluation:
+
+```powershell
+python -m tools.recommendation_evaluation neighbors
+```
+
+Cluster-count evaluation:
+
+```powershell
+python -m tools.recommendation_evaluation clusters
+```
+
+Additional options are available through:
+
+```powershell
+python -m tools.recommendation_evaluation --help
+```
+
+or, for example:
+
+```powershell
+python -m tools.recommendation_evaluation history --help
+```
+
+### Recommendation inspection
+
+General recommendation-data summary:
+
+```powershell
+python -m tools.recommendation_inspect summary
+```
+
+Inspect learned taste clusters:
+
+```powershell
+python -m tools.recommendation_inspect clusters
+```
+
+Inspect a specific game's feature representation and similar games:
+
+```powershell
+python -m tools.recommendation_inspect game "Game Name"
+```
+
+Inspect SteamSpy tag coverage:
+
+```powershell
+python -m tools.recommendation_inspect tags
+```
+
+Inspect a specific tag:
+
+```powershell
+python -m tools.recommendation_inspect tag "Mystery Dungeon"
+```
+
+### Persistence audit
+
+```powershell
+python -m tools.recommendation_persistence_audit
+```
+
+Unlike the other audits, this command intentionally generates and saves a fresh recommendation build before validating the persisted state.
+
+## Phase 5 Status
+
+Phase 5 is functionally complete.
+
+The recommendation model, persistence layer, filtering, explanations, Similar to a Game search, embedded media, responsive recommendation layout, tests, and real-library audit tools are all implemented.
+
+Further recommendation changes should primarily be driven by observed recommendation quality, regressions, or clearly useful UX improvements rather than additional model complexity for its own sake.

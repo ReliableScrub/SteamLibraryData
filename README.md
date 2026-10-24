@@ -123,6 +123,44 @@ The remaining Phase 4 work is primarily documentation and final regression testi
 
 [Read the Phase 4 progress notes](progress/04-User-Config/README.MD)
 
+
+### Phase 5 - ML Recommendations
+
+Phase 5 added local personalized recommendations for games already present in the user's Steam library.
+
+The recommendation system uses a hybrid content-based approach built from Steam genres, SteamSpy tags, local user feedback, positive-neighbor similarity, and K-Means taste clustering.
+
+For users without enough suitable positive history for clustering, the application automatically falls back to a simpler content-based preference model.
+
+Major work included:
+
+- persistent 1-5 star enjoyment ratings
+- weighted content vectors from Steam genres and SteamSpy tags
+- IDF and SteamSpy tag-strength weighting
+- explicit, manual, and implicit preference feedback
+- a learned global preference profile
+- feedback-weighted positive-neighbor matching
+- sparse-match support adjustment
+- adaptive local K-Means taste clustering
+- persisted recommendation builds and explanation data
+- personalized **For You** recommendations
+- recommendation diversification to reduce repetitive results
+- **Similar to a Game** content-similarity search
+- reusable recommendation filtering by type, genre, tag, and HLTB data
+- recommendation explanations showing taste traits and supporting played games
+- Steam artwork, Store access, HLTB information, and embedded trailers
+- responsive, scrollable recommendation detail layouts
+- automated tests and real-library recommendation audits
+
+Several local ML approaches were evaluated during development, including Ridge regression, Truncated SVD, K-Means clustering, One-Class SVM, and Gaussian Mixture modeling.
+
+K-Means was retained because it produced the clearest improvement over the simpler content baseline while remaining local, deterministic, relatively lightweight, and explainable.
+
+Recommendation behavior is evaluated with repeatable holdout testing rather than relying only on individual recommendation examples.
+
+[Read the Phase 5 progress notes](progress/05-ML-Recommendations/README.MD)
+
+
 ## Technology
 
 - **Python**
