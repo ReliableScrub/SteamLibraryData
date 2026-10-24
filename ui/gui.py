@@ -44,6 +44,7 @@ from ui.library_tab import LibraryTab
 from ui.maintenance_tab import MaintenanceTab
 from ui.recommendations_tab import RecommendationsTab
 from ui.update_controller import UpdateController
+from ui.window_state import restore_window_state, save_window_state
 
 OFFICIAL_REPOSITORY_URL = "https://github.com/ReliableScrub/SteamLibraryData"
 DISCUSSIONS_URL = f"{OFFICIAL_REPOSITORY_URL}/discussions"
@@ -128,7 +129,8 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle("Steam Backlog")
-        self.resize(1100, 700)
+        self.setMinimumSize(1000, 650)
+        self.start_maximized = restore_window_state(self)
         self._create_tabs()
 
         self._bind_tabs()
@@ -632,6 +634,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        save_window_state(self)
         self.library_tab.stop_trailer()
         event.accept()
 
@@ -995,5 +998,9 @@ def run_gui(games, steam_api_key):
         system_palette,
     )
 
-    window.show()
+    if window.start_maximized:
+        window.showMaximized()
+    else:
+        window.show()
+
     app.exec()

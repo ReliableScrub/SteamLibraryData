@@ -83,3 +83,19 @@ def set_appearance(appearance):
     settings = load_settings()
     settings["appearance"] = appearance
     save_settings(settings)
+
+
+def get_window_settings():
+    settings = load_settings()
+    window = settings.get("window")
+
+    if not isinstance(window, dict):
+        return {}
+
+    return window
+
+
+def set_window_settings(window):
+    settings = load_settings()
+    settings["window"] = window
+    save_settings(settings)
