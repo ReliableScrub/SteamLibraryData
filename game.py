@@ -35,6 +35,8 @@ class Game:
     achievement_total: int | None = None
     achievements_unlocked: int | None = None
     achievements_checked: bool = False
+    achievements_updated_at: int | None = None
+    achievements_playtime_minutes: int | None = None
 
     manual_status: str | None = None
 

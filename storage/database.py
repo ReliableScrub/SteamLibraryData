@@ -55,6 +55,8 @@ def initialize_database():
                 achievement_total INTEGER,
                 achievements_unlocked INTEGER,
                 achievements_checked INTEGER NOT NULL DEFAULT 0,
+                achievements_updated_at INTEGER,
+                achievements_playtime_minutes INTEGER,
 
                 manual_status TEXT DEFAULT NULL
             );
@@ -157,9 +159,11 @@ def save_game(game):
                 achievement_total,
                 achievements_unlocked,
                 achievements_checked,
+                achievements_updated_at,
+                achievements_playtime_minutes,
                 manual_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(app_id) DO UPDATE SET
                 name = excluded.name,
                 playtime_minutes = excluded.playtime_minutes,
@@ -181,6 +185,8 @@ def save_game(game):
                 achievement_total = excluded.achievement_total,
                 achievements_unlocked = excluded.achievements_unlocked,
                 achievements_checked = excluded.achievements_checked,
+                achievements_updated_at = excluded.achievements_updated_at,
+                achievements_playtime_minutes = excluded.achievements_playtime_minutes,
                 manual_status = excluded.manual_status
         """,
             (
@@ -205,6 +211,8 @@ def save_game(game):
                 game.achievement_total,
                 game.achievements_unlocked,
                 int(game.achievements_checked),
+                game.achievements_updated_at,
+                game.achievements_playtime_minutes,
                 game.manual_status,
             ),
         )
@@ -317,6 +325,8 @@ def load_games():
                 achievement_total,
                 achievements_unlocked,
                 achievements_checked,
+                achievements_updated_at,
+                achievements_playtime_minutes,
                 manual_status
             FROM games
         """).fetchall()
@@ -371,9 +381,11 @@ def load_games():
                 achievement_total=row[18],
                 achievements_unlocked=row[19],
                 achievements_checked=bool(row[20]),
+                achievements_updated_at=row[21],
+                achievements_playtime_minutes=row[22],
                 genres=genres,
                 tags=tags,
-                manual_status=row[21],
+                manual_status=row[23],
             )
 
             games.append(game)
@@ -507,6 +519,14 @@ def ensure_game_columns(conn):
 
     if "classification_updated_at" not in columns:
         conn.execute("ALTER TABLE games ADD COLUMN classification_updated_at INTEGER")
+
+    if "achievements_updated_at" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN achievements_updated_at INTEGER")
+
+    if "achievements_playtime_minutes" not in columns:
+        conn.execute(
+            "ALTER TABLE games ADD COLUMN achievements_playtime_minutes INTEGER"
+        )
 
 
 def reset_empty_hltb_checks():

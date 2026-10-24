@@ -1,3 +1,5 @@
+import time
+
 from api.achievements_api import get_achievement_progress
 from api.hltb_api import get_hltb_data
 from api.steamspy_api import get_game_metadata
@@ -128,6 +130,8 @@ def apply_achievements(game, result):
     game.achievement_total = total
     game.achievements_unlocked = unlocked
     game.achievements_checked = True
+    game.achievements_updated_at = int(time.time())
+    game.achievements_playtime_minutes = game.playtime_minutes
 
 
 def update_achievements(game, steam_id, steam_api_key):

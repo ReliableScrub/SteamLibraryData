@@ -1,7 +1,7 @@
 import random
 from datetime import UTC, datetime
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,7 +22,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from game_updates import apply_hltb_candidate, mark_hltb_no_match
+from game_updates import (
+    apply_achievements,
+    apply_hltb,
+    apply_hltb_candidate,
+    apply_metadata,
+    fetch_achievements,
+    fetch_hltb,
+    fetch_metadata,
+    mark_hltb_no_match,
+)
 from storage.database import (
     clear_game_rating,
     get_game_rating,
@@ -39,6 +48,156 @@ from storage.settings import (
 from ui.game_table_model import GameTableModel
 from ui.genre_tag_filter import GenreTagFilterWidget
 from ui.trailer_player import TrailerPlayer
+
+
+class SelectedGameRefreshSignals(QObject):
+    result_ready = Signal(str, object, object)
+    failed = Signal(str, object, str)
+    finished = Signal()
+
+
+class SelectedGameRefreshWorker(QRunnable):
+    def __init__(
+        self,
+        source,
+        game,
+        steam_id=None,
+        steam_api_key=None,
+    ):
+        super().__init__()
+
+        self.source = source
+        self.game = game
+        self.steam_id = steam_id
+        self.steam_api_key = steam_api_key
+        self.signals = SelectedGameRefreshSignals()
+
+    def run(self):
+        try:
+            if self.source == "hltb":
+                result = fetch_hltb(self.game)
+
+            elif self.source == "metadata":
+                result = fetch_metadata(self.game)
+
+            elif self.source == "achievements":
+                if not self.steam_id:
+                    raise ValueError("A SteamID64 is required to refresh achievements.")
+
+                if not self.steam_api_key:
+                    raise ValueError(
+                        "A Steam Web API key is required to refresh achievements."
+                    )
+
+                result = fetch_achievements(
+                    self.game,
+                    self.steam_id,
+                    self.steam_api_key,
+                )
+
+            else:
+                raise ValueError(f"Unknown selected-game refresh source: {self.source}")
+
+            self.signals.result_ready.emit(
+                self.source,
+                self.game,
+                result,
+            )
+
+        except Exception as error:  # noqa: BLE001
+            self.signals.failed.emit(
+                self.source,
+                self.game,
+                f"{type(error).__name__}: {error}",
+            )
+
+        finally:
+            self.signals.finished.emit()
+
+
+class SelectedGameRefreshController(QObject):
+    busy_changed = Signal(bool)
+    succeeded = Signal(str, object)
+    failed = Signal(str, object, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.thread_pool = QThreadPool.globalInstance()
+        self._busy = False
+        self._active_worker = None
+
+    def is_running(self):
+        return self._busy
+
+    def start(
+        self,
+        source,
+        game,
+        steam_id=None,
+        steam_api_key=None,
+    ):
+        if self._busy or game is None:
+            return False
+
+        self._busy = True
+        self.busy_changed.emit(True)
+
+        worker = SelectedGameRefreshWorker(
+            source,
+            game,
+            steam_id=steam_id,
+            steam_api_key=steam_api_key,
+        )
+
+        self._active_worker = worker
+
+        worker.signals.result_ready.connect(self._apply_result)
+        worker.signals.failed.connect(self.failed.emit)
+        worker.signals.finished.connect(self._finished)
+
+        self.thread_pool.start(worker)
+
+        return True
+
+    def _apply_result(
+        self,
+        source,
+        game,
+        result,
+    ):
+        try:
+            if source == "hltb":
+                apply_hltb(game, result)
+
+            elif source == "metadata":
+                apply_metadata(game, result)
+
+            elif source == "achievements":
+                apply_achievements(game, result)
+
+            else:
+                raise ValueError(f"Unknown selected-game refresh source: {source}")
+
+            save_game(game)
+
+        except Exception as error:  # noqa: BLE001
+            self.failed.emit(
+                source,
+                game,
+                f"{type(error).__name__}: {error}",
+            )
+            return
+
+        self.succeeded.emit(
+            source,
+            game,
+        )
+
+    def _finished(self):
+        self._active_worker = None
+        self._busy = False
+        self.busy_changed.emit(False)
 
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
@@ -63,6 +222,10 @@ class LibraryTab(QWidget):
         self.current_game_pixmap = None
         self.header_sort_column = None
         self.header_sort_order = Qt.SortOrder.AscendingOrder
+
+        self._selected_refresh_controller = SelectedGameRefreshController(self)
+        self._selected_refresh_busy = False
+        self._global_update_busy = False
 
         self._create_filter_controls()
         self._create_table()
@@ -226,6 +389,23 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(False)
 
+        self.refresh_hltb_button = QPushButton("HLTB")
+        self.refresh_metadata_button = QPushButton("Genre / Tags")
+        self.refresh_achievements_button = QPushButton("Achievements")
+
+        self.refresh_hltb_button.setToolTip(
+            "Run a fresh HowLongToBeat lookup for the selected game."
+        )
+        self.refresh_metadata_button.setToolTip(
+            "Refresh genre and tag data for the selected game."
+        )
+        self.refresh_achievements_button.setToolTip(
+            "Refresh Steam achievement progress for the selected game."
+        )
+
+        self.selected_refresh_status = QLabel("")
+        self.selected_refresh_status.setWordWrap(True)
+
         self.trailer_player = TrailerPlayer(self)
 
     def _create_layout(self):
@@ -309,6 +489,16 @@ class LibraryTab(QWidget):
         self.metadata_scroll.setWidget(metadata_content)
         details_layout.addWidget(self.metadata_scroll, 1)
 
+        refresh_row = QHBoxLayout()
+        refresh_row.addWidget(QLabel("Refresh selected:"))
+        refresh_row.addWidget(self.refresh_hltb_button)
+        refresh_row.addWidget(self.refresh_metadata_button)
+        refresh_row.addWidget(self.refresh_achievements_button)
+        refresh_row.addStretch()
+
+        details_layout.addLayout(refresh_row)
+        details_layout.addWidget(self.selected_refresh_status)
+
         details_layout.addWidget(self.trailer_player)
 
         action_row = QHBoxLayout()
@@ -351,8 +541,39 @@ class LibraryTab(QWidget):
         self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
+
+        self.refresh_hltb_button.clicked.connect(
+            lambda: self._refresh_selected_game("hltb")
+        )
+        self.refresh_metadata_button.clicked.connect(
+            lambda: self._refresh_selected_game("metadata")
+        )
+        self.refresh_achievements_button.clicked.connect(
+            lambda: self._refresh_selected_game("achievements")
+        )
+
+        self._selected_refresh_controller.busy_changed.connect(
+            self._selected_refresh_busy_changed
+        )
+        self._selected_refresh_controller.succeeded.connect(
+            self._selected_refresh_succeeded
+        )
+        self._selected_refresh_controller.failed.connect(self._selected_refresh_failed)
+
+        main_window = self.window()
+        update_controller = getattr(
+            main_window,
+            "update_controller",
+            None,
+        )
+
+        if update_controller is not None:
+            update_controller.busy_changed.connect(self._global_update_busy_changed)
+
         self.splitter.splitterMoved.connect(self.update_media_sizes)
         self.rating_filter.currentTextChanged.connect(self.apply_filters)
+
+        self._update_selected_refresh_enabled()
 
     def set_games(self, games):
         self.games = games
@@ -679,6 +900,8 @@ class LibraryTab(QWidget):
             f"Last played: {last_played_text}\nLast 2 weeks: {recent_activity_text}\n\nSteam Playtime: {playtime_hours:.1f} hours\nSteam Type: {steam_type_text}\nHLTB ({hltb_metric}): {hltb_text}\nAchievements: {achievement_text}\n\nGenres: {genres}\n\nTags: {tags}"
         )
         self.steam_page_button.setEnabled(True)
+        self.selected_refresh_status.setText("")
+        self._update_selected_refresh_enabled()
 
         try:
             image_path = get_game_image(game.app_id)
@@ -923,6 +1146,140 @@ class LibraryTab(QWidget):
 
         return result["action"]
 
+    def _main_window(self):
+        return self.window()
+
+    def _refresh_selected_game(self, source):
+        game = self.selected_game
+
+        if game is None:
+            return
+
+        main_window = self._main_window()
+
+        update_controller = getattr(
+            main_window,
+            "update_controller",
+            None,
+        )
+
+        if update_controller is not None and update_controller.is_running():
+            QMessageBox.information(
+                self,
+                "Data Update Running",
+                "Finish or cancel the current Maintenance update before "
+                "refreshing an individual game.",
+            )
+            return
+
+        steam_id = getattr(
+            main_window,
+            "steam_id",
+            None,
+        )
+
+        steam_api_key = getattr(
+            main_window,
+            "steam_api_key",
+            None,
+        )
+
+        source_labels = {
+            "hltb": "HLTB",
+            "metadata": "Genre / Tags",
+            "achievements": "Achievements",
+        }
+
+        self.selected_refresh_status.setText(
+            f"Refreshing {source_labels[source]} for {game.name}..."
+        )
+
+        started = self._selected_refresh_controller.start(
+            source,
+            game,
+            steam_id=steam_id,
+            steam_api_key=steam_api_key,
+        )
+
+        if not started:
+            self.selected_refresh_status.setText(
+                "Another selected-game refresh is already running."
+            )
+
+    def _selected_refresh_busy_changed(self, busy):
+        self._selected_refresh_busy = busy
+        self._update_selected_refresh_enabled()
+
+    def _global_update_busy_changed(self, busy):
+        self._global_update_busy = busy
+        self._update_selected_refresh_enabled()
+
+    def _update_selected_refresh_enabled(self):
+        enabled = (
+            self.selected_game is not None
+            and not self._selected_refresh_busy
+            and not self._global_update_busy
+        )
+
+        self.refresh_hltb_button.setEnabled(enabled)
+        self.refresh_metadata_button.setEnabled(enabled)
+        self.refresh_achievements_button.setEnabled(enabled)
+
+    def _selected_refresh_succeeded(
+        self,
+        source,
+        game,
+    ):
+        source_labels = {
+            "hltb": "HLTB",
+            "metadata": "Genre / Tags",
+            "achievements": "Achievements",
+        }
+
+        self.genre_tag_filter.set_available_from_games(self.games)
+        self.refresh_data()
+
+        if self.selected_game is not None:
+            self.show_selected_game()
+
+        self.data_changed.emit()
+
+        if source == "hltb" and getattr(game, "hltb_match_status", None) == "review":
+            self.selected_refresh_status.setText(
+                f"{source_labels[source]} refreshed for {game.name}; "
+                "the match needs review."
+            )
+            return
+
+        self.selected_refresh_status.setText(
+            f"{source_labels[source]} refreshed for {game.name}."
+        )
+
+    def _selected_refresh_failed(
+        self,
+        source,
+        game,
+        error_message,
+    ):
+        source_labels = {
+            "hltb": "HLTB",
+            "metadata": "Genre / Tags",
+            "achievements": "Achievements",
+        }
+
+        label = source_labels.get(source, source)
+
+        self.selected_refresh_status.setText(f"{label} refresh failed for {game.name}.")
+
+        QMessageBox.warning(
+            self,
+            f"{label} Refresh Failed",
+            f"Could not refresh {label} for {game.name}:\\n\\n{error_message}",
+        )
+
+    def stop_trailer(self):
+        self.trailer_player.stop()
+
     def clear_game_details(self):
         self.selected_game = None
 
@@ -944,6 +1301,8 @@ class LibraryTab(QWidget):
         self.rating_combo.blockSignals(False)
 
         self.steam_page_button.setEnabled(False)
+        self.selected_refresh_status.setText("")
+        self._update_selected_refresh_enabled()
 
         self.current_game_pixmap = None
 

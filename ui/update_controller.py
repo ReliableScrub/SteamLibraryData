@@ -184,31 +184,45 @@ class SteamLibraryRefreshController(QObject):
 
         try:
             existing_by_app_id = {game.app_id: game for game in self._existing_games}
+
             merged_games = []
 
             for steam_game in steam_games:
                 existing_game = existing_by_app_id.get(steam_game.app_id)
 
-                if existing_game is not None:
-                    existing_game.name = steam_game.name
-                    existing_game.playtime_minutes = steam_game.playtime_minutes
-                    existing_game.playtime_2weeks_minutes = (
-                        steam_game.playtime_2weeks_minutes
-                    )
-                    existing_game.last_played_timestamp = (
-                        steam_game.last_played_timestamp
-                    )
-                    game = existing_game
-                else:
+                if existing_game is None:
                     game = steam_game
+                    save_game(game)
+                    merged_games.append(game)
+                    continue
 
-                save_game(game)
-                merged_games.append(game)
+                changed = (
+                    existing_game.name != steam_game.name
+                    or existing_game.playtime_minutes != steam_game.playtime_minutes
+                    or existing_game.playtime_2weeks_minutes
+                    != steam_game.playtime_2weeks_minutes
+                    or existing_game.last_played_timestamp
+                    != steam_game.last_played_timestamp
+                )
+
+                existing_game.name = steam_game.name
+                existing_game.playtime_minutes = steam_game.playtime_minutes
+                existing_game.playtime_2weeks_minutes = (
+                    steam_game.playtime_2weeks_minutes
+                )
+                existing_game.last_played_timestamp = steam_game.last_played_timestamp
+
+                if changed:
+                    save_game(existing_game)
+
+                merged_games.append(existing_game)
 
             delete_games_not_in(game.app_id for game in merged_games)
+
         except Exception as error:  # noqa: BLE001
             self.failed.emit(
-                f"Could not save the refreshed Steam library. {type(error).__name__}: {error}"
+                f"Could not save the refreshed Steam library. "
+                f"{type(error).__name__}: {error}"
             )
 
             return
@@ -250,6 +264,10 @@ class UpdateController(QObject):
         self._combined_progress = {}
         self._combined_total = 0
         self._cancel_requested = False
+
+        self._startup_refresh_active = False
+        self._startup_steam_id = None
+        self._library_refresh_succeeded = False
 
         self._library.succeeded.connect(self._library_succeeded)
         self._library.failed.connect(self._library_failed)
@@ -361,6 +379,7 @@ class UpdateController(QObject):
             return "busy"
 
         self._cancel_requested = False
+        self._library_refresh_succeeded = False
 
         self.status_changed.emit("library", "Steam Library: Refreshing...")
         self.progress_changed.emit("library", 0, 0, True)
@@ -374,14 +393,39 @@ class UpdateController(QObject):
 
         return "started"
 
+    def start_startup_refresh(self, steam_id):
+        if self.is_running():
+            return "busy"
+
+        if not self.games:
+            return "nothing"
+
+        self._startup_refresh_active = True
+        self._startup_steam_id = steam_id
+
+        result = self.start_library_refresh(steam_id)
+
+        if result != "started":
+            self._startup_refresh_active = False
+            self._startup_steam_id = None
+
+        return result
+
     def _library_succeeded(self, merged_games):
+        self._library_refresh_succeeded = True
         self.games = merged_games
 
         self.games_changed.emit(merged_games)
         self.refresh_statuses()
 
     def _library_failed(self, message):
+        self._library_refresh_succeeded = False
         self.status_changed.emit("library", "Steam Library: Refresh failed")
+
+        if self._startup_refresh_active:
+            self.item_failed.emit(f"Startup Steam library refresh failed: {message}")
+            return
+
         self.error.emit("Steam Library", f"Library refresh failed:\n{message}")
 
     def _library_finished(self, was_cancelled):
@@ -390,7 +434,20 @@ class UpdateController(QObject):
         if was_cancelled:
             self.status_changed.emit("library", "Steam Library: Refresh cancelled")
 
+        startup_refresh = self._startup_refresh_active
+        startup_steam_id = self._startup_steam_id
+        library_succeeded = self._library_refresh_succeeded
+
+        self._startup_refresh_active = False
+        self._startup_steam_id = None
+        self._library_refresh_succeeded = False
         self._cancel_requested = False
+
+        if startup_refresh and not was_cancelled and library_succeeded:
+            result = self.start_recent_achievement_refresh(startup_steam_id)
+
+            if result == "started":
+                return
 
         self.busy_changed.emit(self.is_running())
 
@@ -465,6 +522,60 @@ class UpdateController(QObject):
             source="metadata",
             task_name="Metadata",
             action_text="Getting metadata for",
+        )
+
+    def recent_achievement_games(self):
+        games = []
+
+        for game in self.games:
+            if not game.is_backlog_eligible():
+                continue
+
+            recent_minutes = game.playtime_2weeks_minutes or 0
+
+            if recent_minutes <= 0:
+                continue
+
+            checked_playtime = game.achievements_playtime_minutes
+
+            if (
+                checked_playtime is not None
+                and game.playtime_minutes <= checked_playtime
+            ):
+                continue
+
+            games.append(game)
+
+        return sorted(
+            games,
+            key=lambda game: (
+                game.playtime_2weeks_minutes or 0,
+                game.last_played_timestamp or 0,
+            ),
+            reverse=True,
+        )
+
+    def start_recent_achievement_refresh(self, steam_id):
+        games = self.recent_achievement_games()
+
+        if not games:
+            return "nothing"
+
+        steam_api_key = self.steam_api_key
+
+        def achievement_updater(game):
+            update_achievements(
+                game,
+                steam_id,
+                steam_api_key,
+            )
+
+        return self._start_batch(
+            games=games,
+            updater=achievement_updater,
+            source="achievements",
+            task_name="Recent achievements",
+            action_text="Refreshing recent achievements for",
         )
 
     def start_achievement_batch(self, steam_id):

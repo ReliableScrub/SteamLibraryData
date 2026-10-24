@@ -137,6 +137,8 @@ class MainWindow(QMainWindow):
 
         if not self.games:
             QTimer.singleShot(0, self.first_run_setup)
+        else:
+            QTimer.singleShot(0, self.start_startup_refresh)
 
     def _create_contact_tab(self):
         tab = QWidget()
@@ -331,6 +333,12 @@ class MainWindow(QMainWindow):
 
     def start_library_refresh(self):
         self.update_controller.start_library_refresh(self.steam_id)
+
+    def start_startup_refresh(self):
+        result = self.update_controller.start_startup_refresh(self.steam_id)
+
+        if result not in {"started", "nothing"}:
+            print(f"Startup refresh did not start: {result}")
 
     def start_steam_classification(self):
         result = self.update_controller.start_classification()
