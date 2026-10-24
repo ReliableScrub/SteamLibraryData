@@ -7,6 +7,19 @@ from fake_useragent import UserAgent
 from howlongtobeatpy import HowLongToBeat, SearchModifiers
 from howlongtobeatpy.HTMLRequests import HTMLRequests
 
+HLTB_CONNECT_TIMEOUT = 10
+HLTB_READ_TIMEOUT = 20
+
+
+class HLTBClientCancelled(Exception):
+    pass
+
+
+def _raise_if_cancelled(cancel_requested):
+    if cancel_requested is not None and cancel_requested():
+        raise HLTBClientCancelled()
+
+
 FALLBACK_USER_AGENT = (
     "Mozilla/5.0 "
     "(Windows NT 10.0; Win64; x64) "
@@ -99,14 +112,16 @@ class HLTBClient:
 
         return self._user_agent
 
-    def _refresh_auth(self):
+    def _refresh_auth(self, cancel_requested=None):
+        _raise_if_cancelled(cancel_requested)
+
         refresh_start = time.perf_counter()
         self._increment_stat("auth_refreshes")
-
         user_agent = self._get_user_agent()
 
         try:
             search_info = HTMLRequests.send_website_request_getcode(user_agent)
+            _raise_if_cancelled(cancel_requested)
 
             search_path = None
 
@@ -117,18 +132,19 @@ class HLTBClient:
                 search_path,
                 user_agent,
             )
+            _raise_if_cancelled(cancel_requested)
+
+        except HLTBClientCancelled:
+            raise
 
         except requests.RequestException:
             self._increment_stat("request_failures")
-
             self._auth_struct = None
             self._auth_initialized = False
-
             return False
 
         finally:
             refresh_seconds = time.perf_counter() - refresh_start
-
             self._add_seconds(
                 "auth_refresh_seconds",
                 refresh_seconds,
@@ -136,13 +152,11 @@ class HLTBClient:
 
         if search_path is not None:
             self._search_url = HTMLRequests.BASE_URL + search_path
-
         else:
             self._search_url = HTMLRequests.SEARCH_URL
 
         self._auth_struct = auth_struct
         self._auth_initialized = True
-
         return True
 
     def _post_search(
@@ -150,7 +164,9 @@ class HLTBClient:
         game_name,
         search_modifiers,
         page,
+        cancel_requested=None,
     ):
+        _raise_if_cancelled(cancel_requested)
         user_agent = self._get_user_agent()
 
         headers = HTMLRequests.get_search_request_headers(
@@ -173,19 +189,20 @@ class HLTBClient:
                 self._search_url,
                 headers=headers,
                 data=payload,
-                timeout=60,
+                timeout=(HLTB_CONNECT_TIMEOUT, HLTB_READ_TIMEOUT),
             )
+            _raise_if_cancelled(cancel_requested)
+
+        except HLTBClientCancelled:
+            raise
 
         except requests.RequestException as error:
             print(f"HLTB transport exception for {game_name}: {error}")
-
             self._increment_stat("request_failures")
-
             return None
 
         finally:
             post_seconds = time.perf_counter() - post_start
-
             self._add_seconds(
                 "search_post_seconds",
                 post_seconds,
@@ -211,18 +228,28 @@ class HLTBClient:
         search_modifiers=SearchModifiers.NONE,
         similarity_case_sensitive=True,
         page=1,
+        cancel_requested=None,
     ):
         if game_name is None or len(game_name) == 0:
             return None
 
-        with self._request_lock:
-            if not self._auth_initialized and not self._refresh_auth():
+        while True:
+            _raise_if_cancelled(cancel_requested)
+
+            if self._request_lock.acquire(timeout=0.1):
+                break
+
+        try:
+            _raise_if_cancelled(cancel_requested)
+
+            if not self._auth_initialized and not self._refresh_auth(cancel_requested):
                 return None
 
             response = self._post_search(
                 game_name,
                 search_modifiers,
                 page,
+                cancel_requested=cancel_requested,
             )
 
             if response is None:
@@ -237,34 +264,32 @@ class HLTBClient:
 
             if response.status_code == 429:
                 print(f"HLTB rate limited: {game_name}")
-
                 self._increment_stat("request_failures")
-
                 return None
 
             if response.status_code not in self.AUTH_REFRESH_STATUS_CODES:
                 print(
                     f"HLTB transport response: {response.status_code} for {game_name}"
                 )
-
                 self._increment_stat("request_failures")
-
                 return None
 
             # The cached search URL/auth may have expired or changed. Refresh
             # both once, then retry the same search. Higher-level retry logic
             # still handles transient server/network failures.
             self._increment_stat("auth_retries")
-
             self._auth_initialized = False
 
-            if not self._refresh_auth():
+            _raise_if_cancelled(cancel_requested)
+
+            if not self._refresh_auth(cancel_requested):
                 return None
 
             response = self._post_search(
                 game_name,
                 search_modifiers,
                 page,
+                cancel_requested=cancel_requested,
             )
 
             if response is None:
@@ -279,7 +304,6 @@ class HLTBClient:
 
             if response.status_code == 429:
                 print(f"HLTB rate limited after auth refresh: {game_name}")
-
             else:
                 print(
                     f"HLTB transport response after auth refresh: "
@@ -288,8 +312,10 @@ class HLTBClient:
                 )
 
             self._increment_stat("request_failures")
-
             return None
+
+        finally:
+            self._request_lock.release()
 
 
 HLTB_CLIENT = HLTBClient()

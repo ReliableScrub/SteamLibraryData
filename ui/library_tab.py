@@ -458,53 +458,57 @@ class LibraryTab(QWidget):
 
     def _create_layout(self):
         layout = QVBoxLayout(self)
-        search_row = QHBoxLayout()
 
+        search_row = QHBoxLayout()
         search_row.addWidget(self.search_box, 1)
         search_row.addWidget(self.pick_button)
 
-        filter_row = QHBoxLayout()
+        primary_filter_row = QHBoxLayout()
+        primary_filter_row.addWidget(QLabel("Status:"))
+        primary_filter_row.addWidget(self.status_filter)
+        primary_filter_row.addWidget(QLabel("Type:"))
+        primary_filter_row.addWidget(self.type_filter)
+        primary_filter_row.addWidget(QLabel("HLTB Metric:"))
+        primary_filter_row.addWidget(self.hltb_metric_filter)
+        primary_filter_row.addWidget(QLabel("HLTB Hours:"))
+        primary_filter_row.addWidget(self.hltb_min_filter)
+        primary_filter_row.addWidget(QLabel("to"))
+        primary_filter_row.addWidget(self.hltb_max_filter)
+        primary_filter_row.addStretch()
 
-        filter_row.addWidget(QLabel("Status:"))
-        filter_row.addWidget(self.status_filter)
-        filter_row.addWidget(QLabel("Type:"))
-        filter_row.addWidget(self.type_filter)
-        filter_row.addWidget(QLabel("HLTB Metric:"))
+        secondary_filter_row = QHBoxLayout()
+        secondary_filter_row.addWidget(self.genre_tag_filter, 1)
+        secondary_filter_row.addSpacing(8)
+        secondary_filter_row.addWidget(QLabel("Rating:"))
+        secondary_filter_row.addWidget(self.rating_filter)
+        secondary_filter_row.addStretch()
 
-        filter_row.addWidget(self.hltb_metric_filter)
-        filter_row.addWidget(QLabel("HLTB Hours:"))
-
-        filter_row.addWidget(self.hltb_min_filter)
-        filter_row.addWidget(QLabel("to"))
-        filter_row.addWidget(self.hltb_max_filter)
-
-        filter_row.addSpacing(8)
-        filter_row.addWidget(self.genre_tag_filter)
-
-        filter_row.addWidget(QLabel("Rating:"))
-        filter_row.addWidget(self.rating_filter)
-
-        filter_row.addStretch()
-
-        self.details_panel = QWidget()
-
+        self.details_panel = QScrollArea()
+        self.details_panel.setWidgetResizable(True)
+        self.details_panel.setFrameShape(QFrame.Shape.NoFrame)
+        self.details_panel.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.details_panel.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         self.details_panel.setMinimumWidth(320)
 
-        details_layout = QVBoxLayout(self.details_panel)
+        self.details_content = QWidget()
+        details_layout = QVBoxLayout(self.details_content)
         details_layout.setContentsMargins(12, 12, 12, 12)
         details_layout.setSpacing(8)
 
         details_layout.addWidget(
-            self.game_image, alignment=Qt.AlignmentFlag.AlignHCenter
+            self.game_image,
+            alignment=Qt.AlignmentFlag.AlignHCenter,
         )
         details_layout.addWidget(self.game_title)
 
         status_row = QHBoxLayout()
-
         status_row.addWidget(self.status_label)
         status_row.addWidget(self.status_value)
         status_row.addSpacing(8)
-
         status_row.addWidget(self.manual_status_combo)
         status_row.addStretch()
         details_layout.addLayout(status_row)
@@ -513,37 +517,17 @@ class LibraryTab(QWidget):
         rating_row.addWidget(self.rating_label)
         rating_row.addWidget(self.rating_combo)
         rating_row.addStretch()
-
         details_layout.addLayout(rating_row)
 
-        self.metadata_scroll = QScrollArea()
-        self.metadata_scroll.setWidgetResizable(True)
-        self.metadata_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.metadata_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.metadata_scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        self.metadata_scroll.setMinimumHeight(110)
+        details_layout.addWidget(self.game_details)
 
-        metadata_content = QWidget()
-        metadata_layout = QVBoxLayout(metadata_content)
-        metadata_layout.setContentsMargins(0, 0, 0, 0)
-        metadata_layout.setSpacing(0)
-        metadata_layout.addWidget(self.game_details)
-        metadata_layout.addStretch()
-
-        self.metadata_scroll.setWidget(metadata_content)
-        details_layout.addWidget(self.metadata_scroll, 1)
+        details_layout.addWidget(QLabel("Refresh selected:"))
 
         refresh_row = QHBoxLayout()
-        refresh_row.addWidget(QLabel("Refresh selected:"))
         refresh_row.addWidget(self.refresh_hltb_button)
         refresh_row.addWidget(self.refresh_metadata_button)
         refresh_row.addWidget(self.refresh_achievements_button)
         refresh_row.addStretch()
-
         details_layout.addLayout(refresh_row)
         details_layout.addWidget(self.selected_refresh_status)
 
@@ -552,15 +536,15 @@ class LibraryTab(QWidget):
         action_row = QHBoxLayout()
         action_row.addWidget(self.steam_page_button)
         action_row.addStretch()
-
         details_layout.addLayout(action_row)
+        details_layout.addStretch()
+
+        self.details_panel.setWidget(self.details_content)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-
         self.splitter.addWidget(self.table)
         self.splitter.addWidget(self.details_panel)
         self.splitter.setStretchFactor(0, 3)
-
         self.splitter.setStretchFactor(1, 2)
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
@@ -608,7 +592,8 @@ class LibraryTab(QWidget):
         self._update_advanced_filter_controls()
 
         layout.addLayout(search_row)
-        layout.addLayout(filter_row)
+        layout.addLayout(primary_filter_row)
+        layout.addLayout(secondary_filter_row)
         layout.addLayout(advanced_header_row)
         layout.addWidget(self.advanced_panel)
         layout.addWidget(self.splitter, 1)
@@ -664,7 +649,9 @@ class LibraryTab(QWidget):
         self.splitter.splitterMoved.connect(self.update_media_sizes)
         self.rating_filter.currentTextChanged.connect(self.apply_filters)
 
-        self.advanced_toggle_button.toggled.connect(self._advanced_expanded_changed)
+        self.advanced_toggle_button.toggled.connect(
+            self._advanced_expanded_changed
+        )
         self.advanced_clear_button.clicked.connect(self.clear_advanced_filters)
 
         self.achievement_filter.currentTextChanged.connect(
@@ -881,7 +868,8 @@ class LibraryTab(QWidget):
         self.achievement_remaining_filter.setEnabled(uses_remaining)
 
         custom_hltb = (
-            self.playtime_hltb_filter.currentText() == "Custom % of Completionist"
+            self.playtime_hltb_filter.currentText()
+            == "Custom % of Completionist"
         )
 
         self.playtime_hltb_percent_label.setEnabled(custom_hltb)
@@ -980,7 +968,9 @@ class LibraryTab(QWidget):
             if completionist is None or completionist <= 0:
                 return False
 
-            target = completionist * (self.playtime_hltb_percent_filter.value() / 100)
+            target = completionist * (
+                self.playtime_hltb_percent_filter.value() / 100
+            )
 
         else:
             return True
@@ -1027,7 +1017,9 @@ class LibraryTab(QWidget):
             return True
 
         all_checked = (
-            game.hltb_checked and game.metadata_checked and game.achievements_checked
+            game.hltb_checked
+            and game.metadata_checked
+            and game.achievements_checked
         )
 
         if mode == "All enrichment checked":
@@ -1175,7 +1167,9 @@ class LibraryTab(QWidget):
         now = time.time()
 
         filtered_games = [
-            game for game in filtered_games if self._matches_advanced_filters(game, now)
+            game
+            for game in filtered_games
+            if self._matches_advanced_filters(game, now)
         ]
 
         # 7. SEARCH
@@ -1365,6 +1359,10 @@ class LibraryTab(QWidget):
                 self.selected_game.app_id,
                 rating_index,
             )
+
+        self.refresh_ratings()
+        self.refresh_data()
+        self.data_changed.emit()
 
     def review_hltb_matches(self):
         review_games = [
@@ -1697,11 +1695,17 @@ class LibraryTab(QWidget):
         QDesktopServices.openUrl(url)
 
     def update_media_sizes(self):
-        layout = self.details_panel.layout()
+        if not hasattr(self, "details_content"):
+            return
+
+        layout = self.details_content.layout()
         margins = layout.contentsMargins()
         available_width = (
-            self.details_panel.contentsRect().width() - margins.left() - margins.right()
+            self.details_panel.viewport().width()
+            - margins.left()
+            - margins.right()
         )
+
         media_width = min(max(available_width, 1), 520)
         image_height = int(media_width * 215 / 460)
         self.game_image.setFixedSize(media_width, image_height)
@@ -1712,20 +1716,21 @@ class LibraryTab(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-
             self.game_image.setPixmap(scaled_pixmap)
 
         self._update_detail_typography()
 
     def _update_detail_typography(self):
-        panel_width = self.details_panel.contentsRect().width()
+        panel_width = self.details_panel.viewport().width()
         wide = panel_width >= 560
 
         title_size = 17 if wide else 15
         detail_size = 12 if wide else 11
         label_size = 11 if wide else 10
 
-        self.game_title.setStyleSheet(f"font-size: {title_size}pt; font-weight: bold;")
+        self.game_title.setStyleSheet(
+            f"font-size: {title_size}pt; font-weight: bold;"
+        )
         self.game_details.setStyleSheet(f"font-size: {detail_size}pt;")
         self.status_label.setStyleSheet(f"font-size: {label_size}pt;")
         self.status_value.setStyleSheet(f"font-size: {label_size}pt;")

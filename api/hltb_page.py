@@ -4,6 +4,17 @@ import re
 import requests
 
 HLTB_GAME_URL = "https://howlongtobeat.com/game/{game_id}"
+HLTB_DETAIL_CONNECT_TIMEOUT = 10
+HLTB_DETAIL_READ_TIMEOUT = 15
+
+
+class HLTBDetailCancelled(Exception):
+    pass
+
+
+def _raise_if_cancelled(cancel_requested):
+    if cancel_requested is not None and cancel_requested():
+        raise HLTBDetailCancelled()
 
 HLTB_PAGE_HEADERS = {
     "User-Agent": (
@@ -61,21 +72,24 @@ def normalize_release_date(value):
     return value
 
 
-def fetch_hltb_detail_payload(hltb_game_id):
+def fetch_hltb_detail_payload(hltb_game_id, cancel_requested=None):
+    _raise_if_cancelled(cancel_requested)
     url = HLTB_GAME_URL.format(game_id=hltb_game_id)
 
     try:
         response = requests.get(
             url,
             headers=HLTB_PAGE_HEADERS,
-            timeout=30,
+            timeout=(HLTB_DETAIL_CONNECT_TIMEOUT, HLTB_DETAIL_READ_TIMEOUT),
         )
-
+        _raise_if_cancelled(cancel_requested)
         response.raise_for_status()
+
+    except HLTBDetailCancelled:
+        raise
 
     except requests.RequestException as error:
         print(f"HLTB detail request failed for {hltb_game_id}: {error}")
-
         return None
 
     next_data_match = re.search(
@@ -90,23 +104,18 @@ def fetch_hltb_detail_payload(hltb_game_id):
 
     if next_data_match is None:
         print(f"HLTB detail page {hltb_game_id} has no __NEXT_DATA__")
-
         return None
 
     try:
         payload = json.loads(next_data_match.group(1))
-
     except json.JSONDecodeError:
         print(f"HLTB detail page {hltb_game_id} has invalid __NEXT_DATA__")
-
         return None
 
     try:
         return payload["props"]["pageProps"]["game"]["data"]
-
     except (KeyError, TypeError):
         print(f"HLTB detail page {hltb_game_id} has an unexpected data structure")
-
         return None
 
 
@@ -121,8 +130,11 @@ def serialize_relationship(relationship):
     }
 
 
-def get_hltb_detail_data(hltb_game_id):
-    detail_payload = fetch_hltb_detail_payload(hltb_game_id)
+def get_hltb_detail_data(hltb_game_id, cancel_requested=None):
+    detail_payload = fetch_hltb_detail_payload(
+        hltb_game_id,
+        cancel_requested=cancel_requested,
+    )
 
     if detail_payload is None:
         return None
@@ -131,11 +143,9 @@ def get_hltb_detail_data(hltb_game_id):
 
     if not isinstance(games, list) or not games or not isinstance(games[0], dict):
         print(f"HLTB detail page {hltb_game_id} has no usable game record")
-
         return None
 
     game_data = games[0]
-
     relationships = []
 
     for relationship in detail_payload.get("relationships") or []:
@@ -158,8 +168,11 @@ def get_hltb_detail_data(hltb_game_id):
     }
 
 
-def get_hltb_detail_steam_app_id(hltb_game_id):
-    detail_data = get_hltb_detail_data(hltb_game_id)
+def get_hltb_detail_steam_app_id(hltb_game_id, cancel_requested=None):
+    detail_data = get_hltb_detail_data(
+        hltb_game_id,
+        cancel_requested=cancel_requested,
+    )
 
     if detail_data is None:
         return None

@@ -27,6 +27,29 @@ def _format_worker_error(error):
     return f"{type(error).__name__}: {error}"
 
 
+class RecommendationBuildWorker(QObject):
+    succeeded = Signal()
+    failed = Signal(str)
+    finished = Signal()
+
+    @Slot()
+    def run(self):
+        try:
+            from recommendations.engine import generate_and_save_recommendations
+
+            generate_and_save_recommendations()
+            self.succeeded.emit()
+
+        except Exception as error:  # noqa: BLE001
+            self.failed.emit(
+                "Recommendation rebuild failed. "
+                f"{type(error).__name__}: {error}"
+            )
+
+        finally:
+            self.finished.emit()
+
+
 class SteamLibraryRefreshWorker(QObject):
     succeeded = Signal(object)
     failed = Signal(str)
@@ -163,6 +186,7 @@ class BatchUpdateWorker(QObject):
         updater,
         task_name,
         action_text,
+        cancel_aware=False,
     ):
         super().__init__()
 
@@ -170,6 +194,7 @@ class BatchUpdateWorker(QObject):
         self.updater = updater
         self.task_name = task_name
         self.action_text = action_text
+        self.cancel_aware = cancel_aware
         self._cancel_requested = Event()
 
     def cancel(self):
@@ -180,31 +205,32 @@ class BatchUpdateWorker(QObject):
         total = len(self.games)
 
         try:
-            for index, game in enumerate(
-                self.games,
-                start=1,
-            ):
+            for index, game in enumerate(self.games, start=1):
                 if self._cancel_requested.is_set():
                     break
 
                 self.status_changed.emit(f"{self.action_text} {game.name}...")
 
                 try:
-                    # Finish the current item cleanly even if
-                    # cancellation is requested while it runs.
-                    self.updater(game)
+                    if self.cancel_aware:
+                        self.updater(
+                            game,
+                            cancel_requested=self._cancel_requested.is_set,
+                        )
+                    else:
+                        self.updater(game)
 
                 except Exception as error:  # noqa: BLE001
+                    if self._cancel_requested.is_set():
+                        break
+
                     self.item_failed.emit(
                         f"{self.task_name} failed for "
                         f"{game.name}: "
                         f"{_format_worker_error(error)}"
                     )
 
-                self.progress_changed.emit(
-                    index,
-                    total,
-                )
+                self.progress_changed.emit(index, total)
 
                 if self._cancel_requested.is_set():
                     break

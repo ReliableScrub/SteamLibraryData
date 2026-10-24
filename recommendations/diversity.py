@@ -70,7 +70,8 @@ def rerank_mmr(
                 selected_vector,
             )
 
-            if similarity > max_selected_similarity[score.app_id]:
-                max_selected_similarity[score.app_id] = similarity
+            max_selected_similarity[score.app_id] = max(
+                max_selected_similarity[score.app_id], similarity
+            )
 
     return selected

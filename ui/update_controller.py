@@ -260,6 +260,7 @@ class UpdateController(QObject):
         self._cancel_requested = False
         self._failures = []
         self._batch_completed = 0
+        self._batch_total = 0
 
         self._startup_refresh_active = False
         self._startup_steam_id = None
@@ -498,15 +499,12 @@ class UpdateController(QObject):
         self.status_changed.emit(
             "classification", "Steam Classification: Refresh failed"
         )
-
         self._record_item_failure(
             "classification",
             f"Steam classification failed: {message}",
         )
-
         self.error.emit(
-            "Steam Classification",
-            f"Steam classification failed:\n{message}",
+            "Steam Classification", f"Steam classification failed:\n{message}"
         )
 
     def _classification_finished(self, was_cancelled):
@@ -630,6 +628,7 @@ class UpdateController(QObject):
         self._cancel_requested = False
         self._batch_source = source
         self._batch_completed = 0
+        self._batch_total = len(games)
 
         self.progress_changed.emit(source, 0, len(games), True)
 
@@ -639,30 +638,27 @@ class UpdateController(QObject):
             updater,
             task_name,
             action_text,
+            cancel_aware=(source == "hltb"),
         )
 
         self._batch_worker.moveToThread(self._batch_thread)
         self._batch_thread.started.connect(self._batch_worker.run)
-
         self._batch_worker.status_changed.connect(
             lambda text: self.status_changed.emit(source, text)
         )
 
         self._batch_worker.progress_changed.connect(self._batch_progress)
-
         self._batch_worker.item_failed.connect(
             lambda message, source=source: self._record_item_failure(
                 source,
                 message,
             )
         )
-
         self._batch_worker.finished.connect(self._batch_thread.quit)
         self._batch_worker.finished.connect(self._batch_worker.deleteLater)
 
         self._batch_thread.finished.connect(self._batch_finished)
         self._batch_thread.finished.connect(self._batch_thread.deleteLater)
-
         self._batch_thread.start()
         self.busy_changed.emit(True)
 
@@ -670,7 +666,6 @@ class UpdateController(QObject):
 
     def _batch_progress(self, completed, total):
         self._batch_completed = completed
-
         self.progress_changed.emit(
             self._batch_source,
             completed,
@@ -691,6 +686,7 @@ class UpdateController(QObject):
         self._batch_thread = None
         self._batch_source = None
         self._batch_completed = 0
+        self._batch_total = 0
         self._cancel_requested = False
 
         self.data_changed.emit()
@@ -702,10 +698,8 @@ class UpdateController(QObject):
                 f"{self._source_title(source)}: Cancelled — "
                 f"{processed} processed, {failure_count} failed",
             )
-
         elif source is not None and failure_count:
             succeeded = max(processed - failure_count, 0)
-
             self.status_changed.emit(
                 source,
                 f"{self._source_title(source)}: Complete — "
@@ -797,6 +791,7 @@ class UpdateController(QObject):
             updater,
             self._source_title(source),
             action_text,
+            cancel_aware=(source == "hltb"),
         )
 
         self._combined_threads[source] = thread
@@ -815,7 +810,10 @@ class UpdateController(QObject):
             )
         )
         worker.item_failed.connect(
-            lambda message, source=source: self._record_item_failure(source, message)
+            lambda message, source=source: self._record_item_failure(
+                source,
+                message,
+            )
         )
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -859,43 +857,30 @@ class UpdateController(QObject):
             self.progress_changed.emit(source, 0, 0, False)
 
         self.progress_changed.emit("all", 0, 0, False)
-
         self.data_changed.emit()
         self.refresh_statuses()
 
         remaining = sum(1 for game in self.games if not game.hltb_checked)
-
         remaining += sum(1 for game in self.games if not game.metadata_checked)
-
         remaining += sum(1 for game in self.games if not game.achievements_checked)
 
         if was_cancelled:
             self.status_changed.emit(
                 "all",
-                f"Missing Data: Cancelled — "
-                f"{processed} processed, "
-                f"{failure_count} failed, "
-                f"{remaining} still unchecked",
+                f"Missing Data: Cancelled — {processed} processed, "
+                f"{failure_count} failed, {remaining} still unchecked",
             )
-
         elif failure_count:
             self.status_changed.emit(
                 "all",
-                f"Missing Data: Complete with "
-                f"{failure_count} failures "
+                f"Missing Data: Complete with {failure_count} failures "
                 f"({remaining} still unchecked)",
             )
-
         elif remaining == 0:
-            self.status_changed.emit(
-                "all",
-                "Missing Data: Complete",
-            )
-
+            self.status_changed.emit("all", "Missing Data: Complete")
         else:
             self.status_changed.emit(
-                "all",
-                f"Missing Data: {remaining} still unchecked",
+                "all", f"Missing Data: {remaining} still unchecked"
             )
 
         self._combined_progress = {}

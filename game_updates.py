@@ -10,8 +10,12 @@ from storage.database import (
 )
 
 
-def fetch_hltb(game):
-    return get_hltb_data(game.name, game.app_id)
+def fetch_hltb(game, cancel_requested=None):
+    return get_hltb_data(
+        game.name,
+        game.app_id,
+        cancel_requested=cancel_requested,
+    )
 
 
 def clear_hltb_match(game):
@@ -105,13 +109,15 @@ def _restore_hltb_state(game, state):
     ) = state
 
 
-def update_hltb(game):
-    result = fetch_hltb(game)
+def update_hltb(game, cancel_requested=None):
+    result = fetch_hltb(
+        game,
+        cancel_requested=cancel_requested,
+    )
     previous = _hltb_state(game)
 
     try:
         apply_hltb(game, result)
-
         candidates = result.get("candidates", [])
         save_hltb_data(game, candidates=candidates)
 

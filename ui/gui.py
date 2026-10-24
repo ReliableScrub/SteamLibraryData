@@ -256,7 +256,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
     def _bind_tabs(self):
-        self.library_tab.data_changed.connect(self.update_controller.refresh_statuses)
+        self.library_tab.data_changed.connect(self._library_data_changed)
+        self.recommendations_tab.build_busy_changed.connect(
+            self._recommendation_busy_changed
+        )
 
         self.maintenance_tab.library_button.clicked.connect(self.start_library_refresh)
 
@@ -328,7 +331,15 @@ class MainWindow(QMainWindow):
         self.update_controller.item_failed.connect(print)
 
     def _update_busy_state(self, busy):
-        self.maintenance_tab.set_busy(busy)
+        self.recommendations_tab.set_update_busy(busy)
+        self.maintenance_tab.set_busy(
+            busy or self.recommendations_tab.recommendation_build_running()
+        )
+
+    def _recommendation_busy_changed(self, busy):
+        self.maintenance_tab.set_busy(
+            busy or self.update_controller.is_running()
+        )
 
     def _games_changed(self, games):
         self.games = games
@@ -365,11 +376,7 @@ class MainWindow(QMainWindow):
 
         for failure in failures:
             source = failure.get("source", "update")
-
-            grouped.setdefault(
-                source,
-                [],
-            ).append(failure.get("message", ""))
+            grouped.setdefault(source, []).append(failure.get("message", ""))
 
         lines = []
 
@@ -386,13 +393,8 @@ class MainWindow(QMainWindow):
             if not messages:
                 continue
 
-            heading = source_names.get(
-                source,
-                source.title(),
-            )
-
-            lines.append(heading)
-            lines.append("-" * len(heading))
+            lines.append(source_names.get(source, source.title()))
+            lines.append("-" * len(lines[-1]))
 
             for message in messages:
                 lines.append(message)
@@ -400,13 +402,8 @@ class MainWindow(QMainWindow):
             lines.append("")
 
         for source, messages in grouped.items():
-            heading = source_names.get(
-                source,
-                source.title(),
-            )
-
-            lines.append(heading)
-            lines.append("-" * len(heading))
+            lines.append(source_names.get(source, source.title()))
+            lines.append("-" * len(lines[-1]))
 
             for message in messages:
                 lines.append(message)
@@ -421,28 +418,24 @@ class MainWindow(QMainWindow):
 
         heading = QLabel(
             f"<b>{len(failures)} failure"
-            f"{'' if len(failures) == 1 else 's'} "
-            f"from the most recent update</b>"
+            f"{'' if len(failures) == 1 else 's'} from the most recent update</b>"
         )
-
         layout.addWidget(heading)
 
         details = QPlainTextEdit()
         details.setReadOnly(True)
         details.setPlainText("\n".join(lines).rstrip())
-
-        layout.addWidget(
-            details,
-            1,
-        )
+        layout.addWidget(details, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-
         buttons.rejected.connect(dialog.reject)
-
         layout.addWidget(buttons)
 
         dialog.exec()
+
+    def _library_data_changed(self):
+        self.update_controller.refresh_statuses()
+        self.recommendations_tab.refresh()
 
     def start_library_refresh(self):
         self.update_controller.start_library_refresh(self.steam_id)
@@ -738,6 +731,14 @@ class MainWindow(QMainWindow):
                 self.close_after_updates_stop = True
                 self.update_controller.cancel()
 
+            event.ignore()
+            QTimer.singleShot(
+                100,
+                self.close,
+            )
+            return
+
+        if self.recommendations_tab.recommendation_build_running():
             event.ignore()
             QTimer.singleShot(
                 100,

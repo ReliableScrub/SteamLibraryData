@@ -1,5 +1,5 @@
 import requests
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QUrl, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from api.store_api import get_trailer_url
+
 
 DEFAULT_TRAILER_VOLUME = 15
 MIN_PREVIEW_HEIGHT = 180
@@ -198,15 +199,24 @@ class TrailerPlayer(QWidget):
             QSizePolicy.Policy.Fixed,
         )
 
-        controls = QHBoxLayout(self.controls_widget)
+        controls = QVBoxLayout(self.controls_widget)
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.addWidget(self.trailer_button)
-        controls.addWidget(self.time_label)
-        controls.addStretch()
-        controls.addWidget(self.volume_label)
-        controls.addWidget(self.volume_slider)
-        controls.addWidget(self.volume_value_label)
+        controls.setSpacing(4)
 
+        playback_row = QHBoxLayout()
+        playback_row.setContentsMargins(0, 0, 0, 0)
+        playback_row.addWidget(self.trailer_button)
+        playback_row.addWidget(self.time_label)
+        playback_row.addStretch()
+
+        volume_row = QHBoxLayout()
+        volume_row.setContentsMargins(0, 0, 0, 0)
+        volume_row.addWidget(self.volume_label)
+        volume_row.addWidget(self.volume_slider, 1)
+        volume_row.addWidget(self.volume_value_label)
+
+        controls.addLayout(playback_row)
+        controls.addLayout(volume_row)
         layout.addWidget(self.controls_widget)
 
     def _connect_signals(self):
@@ -377,17 +387,13 @@ class TrailerPlayer(QWidget):
             return
 
         if self.app_id in _NO_TRAILER_CACHE:
-            self.preview_frame.label.setText(
-                "No Steam trailer is available for this game."
-            )
+            self.preview_frame.label.setText("No Steam trailer is available for this game.")
             self.preview_frame.setCursor(Qt.CursorShape.ArrowCursor)
             self.trailer_button.setText("No Trailer")
             self.trailer_button.setEnabled(False)
             return
 
-        self.preview_frame.label.setText(
-            "▶  Trailer Preview\nClick here or Watch Trailer to play."
-        )
+        self.preview_frame.label.setText("▶  Trailer Preview\nClick here or Watch Trailer to play.")
         self.preview_frame.setCursor(Qt.CursorShape.PointingHandCursor)
         self.trailer_button.setText("Watch Trailer")
         self.trailer_button.setEnabled(True)

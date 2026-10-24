@@ -37,6 +37,28 @@ HLTB_DETAIL_STEAM_CACHE = {}
 CACHE_MISS = object()
 
 
+def _raise_if_cancelled(cancel_requested):
+    if cancel_requested is not None and cancel_requested():
+        raise RuntimeError("HLTB update cancelled.")
+
+
+def _interruptible_sleep(delay, cancel_requested):
+    if cancel_requested is None:
+        time.sleep(delay)
+        return
+
+    end_time = time.monotonic() + delay
+
+    while True:
+        _raise_if_cancelled(cancel_requested)
+        remaining = end_time - time.monotonic()
+
+        if remaining <= 0:
+            return
+
+        time.sleep(min(0.1, remaining))
+
+
 class HLTBError(RuntimeError):
     pass
 
@@ -789,7 +811,10 @@ def find_safe_match_for_queries(
 def search_hltb(
     query,
     game_name,
+    cancel_requested=None,
 ):
+    _raise_if_cancelled(cancel_requested)
+
     with HLTB_CACHE_LOCK:
         cached_results = HLTB_QUERY_CACHE.get(
             query,
@@ -801,21 +826,19 @@ def search_hltb(
 
     if cached_results is not CACHE_MISS:
         increment_hltb_stat("query_cache_hits")
-
         return cached_results
 
     max_attempts = 3
 
-    for attempt in range(
-        1,
-        max_attempts + 1,
-    ):
+    for attempt in range(1, max_attempts + 1):
+        _raise_if_cancelled(cancel_requested)
         request_start = time.perf_counter()
 
         results = HLTB_CLIENT.search(
             query,
             SearchModifiers.NONE,
             similarity_case_sensitive=False,
+            cancel_requested=cancel_requested,
         )
 
         request_seconds = time.perf_counter() - request_start
@@ -823,6 +846,8 @@ def search_hltb(
         with HLTB_STATS_LOCK:
             HLTB_STATS["search_requests"] += 1
             HLTB_STATS["search_seconds"] += request_seconds
+
+        _raise_if_cancelled(cancel_requested)
 
         if results is not None:
             with HLTB_CACHE_LOCK:
@@ -834,12 +859,9 @@ def search_hltb(
             break
 
         increment_hltb_stat("retries")
-
         delay = 5 * (2 ** (attempt - 1)) + random.uniform(0, 2)
-
         print(f"HLTB request failed for {query}. Retrying in {delay:.1f}s...")
-
-        time.sleep(delay)
+        _interruptible_sleep(delay, cancel_requested)
 
     raise HLTBUnavailableError(
         "HowLongToBeat could not be reached after "
@@ -1101,13 +1123,13 @@ def find_steam_verified_candidate(
     candidates,
     steam_app_id,
     checked_hltb_ids=None,
+    cancel_requested=None,
 ):
     if checked_hltb_ids is None:
         checked_hltb_ids = set()
 
     try:
         steam_app_id = int(steam_app_id)
-
     except (TypeError, ValueError):
         return None
 
@@ -1115,6 +1137,7 @@ def find_steam_verified_candidate(
         return None
 
     for candidate in candidates:
+        _raise_if_cancelled(cancel_requested)
         hltb_game_id = candidate.get("game_id")
 
         if hltb_game_id is None:
@@ -1124,7 +1147,6 @@ def find_steam_verified_candidate(
             continue
 
         checked_hltb_ids.add(hltb_game_id)
-
         cached_steam_app_id = get_cached_detail_steam_app_id(hltb_game_id)
 
         if cached_steam_app_id is not CACHE_MISS:
@@ -1132,20 +1154,22 @@ def find_steam_verified_candidate(
 
             if cached_steam_app_id == steam_app_id:
                 increment_hltb_stat("steam_cache_hits")
-
                 return candidate
 
             continue
 
         detail_start = time.perf_counter()
-
-        candidate_steam_app_id = get_hltb_detail_steam_app_id(hltb_game_id)
-
+        candidate_steam_app_id = get_hltb_detail_steam_app_id(
+            hltb_game_id,
+            cancel_requested=cancel_requested,
+        )
         detail_seconds = time.perf_counter() - detail_start
 
         with HLTB_STATS_LOCK:
             HLTB_STATS["detail_requests"] += 1
             HLTB_STATS["detail_seconds"] += detail_seconds
+
+        _raise_if_cancelled(cancel_requested)
 
         if candidate_steam_app_id is None:
             continue
@@ -1162,7 +1186,6 @@ def find_steam_verified_candidate(
                 f"{candidate['game_name']} "
                 f"[Steam App ID: {steam_app_id}]"
             )
-
             return candidate
 
     return None
@@ -1171,7 +1194,9 @@ def find_steam_verified_candidate(
 def discover_hltb_candidates(
     game_name,
     steam_app_id,
+    cancel_requested=None,
 ):
+    _raise_if_cancelled(cancel_requested)
     safe_queries = build_hltb_queries(game_name)
 
     cached_match = find_cached_safe_candidate(
@@ -1191,52 +1216,35 @@ def discover_hltb_candidates(
     attempted_queries = []
     checked_hltb_ids = set()
 
-    # First pass:
-    # Try all safe title transformations.
+    # First pass: try all safe title transformations.
     for query in safe_queries:
+        _raise_if_cancelled(cancel_requested)
         searched_queries.add(query)
-
         attempted_queries.append(query)
 
         results = search_hltb(
             query,
             game_name,
+            cancel_requested=cancel_requested,
         )
 
         if not results:
             continue
 
-        cache_search_results(
-            results,
-            query,
-        )
-
-        match = find_safe_match(
-            results,
-            query,
-        )
+        cache_search_results(results, query)
+        match = find_safe_match(results, query)
 
         if match is not None:
             return {
-                "match": serialize_candidate(
-                    match,
-                    query,
-                ),
+                "match": serialize_candidate(match, query),
                 "candidates": [],
                 "attempted_queries": attempted_queries,
             }
 
-        remember_candidates(
-            review_candidates,
-            results,
-            query,
-        )
+        remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(
-                result,
-                query,
-            )
+            serialize_candidate(result, query)
             for result in results[:5]
         ]
 
@@ -1244,6 +1252,7 @@ def discover_hltb_candidates(
             current_candidates,
             steam_app_id,
             checked_hltb_ids,
+            cancel_requested=cancel_requested,
         )
 
         if steam_match is not None:
@@ -1253,58 +1262,39 @@ def discover_hltb_candidates(
                 "attempted_queries": attempted_queries,
             }
 
-    # Second pass:
-    # Broader discovery searches.
+    # Second pass: broader discovery searches.
     for query in build_review_queries(game_name):
+        _raise_if_cancelled(cancel_requested)
+
         if query in searched_queries:
             continue
 
         searched_queries.add(query)
-
         attempted_queries.append(query)
 
         results = search_hltb(
             query,
             game_name,
+            cancel_requested=cancel_requested,
         )
 
         if not results:
             continue
 
-        cache_search_results(
-            results,
-            query,
-        )
-
-        # Even though this is a broader search,
-        # the returned result may still exactly match
-        # one of our safe identities or HLTB aliases.
-        match = find_safe_match_for_queries(
-            results,
-            safe_queries,
-        )
+        cache_search_results(results, query)
+        match = find_safe_match_for_queries(results, safe_queries)
 
         if match is not None:
             return {
-                "match": serialize_candidate(
-                    match,
-                    query,
-                ),
+                "match": serialize_candidate(match, query),
                 "candidates": [],
                 "attempted_queries": attempted_queries,
             }
 
-        remember_candidates(
-            review_candidates,
-            results,
-            query,
-        )
+        remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(
-                result,
-                query,
-            )
+            serialize_candidate(result, query)
             for result in results[:5]
         ]
 
@@ -1312,6 +1302,7 @@ def discover_hltb_candidates(
             current_candidates,
             steam_app_id,
             checked_hltb_ids,
+            cancel_requested=cancel_requested,
         )
 
         if steam_match is not None:
@@ -1339,13 +1330,16 @@ def matched_result(candidate):
 def get_hltb_data(
     game_name,
     steam_app_id,
+    cancel_requested=None,
 ):
     game_start = time.perf_counter()
 
     try:
+        _raise_if_cancelled(cancel_requested)
         discovery = discover_hltb_candidates(
             game_name,
             steam_app_id,
+            cancel_requested=cancel_requested,
         )
 
         match = discovery["match"]
@@ -1356,15 +1350,10 @@ def get_hltb_data(
         candidates = discovery["candidates"]
         attempted_queries = discovery["attempted_queries"]
 
-        # Discovery exhausted both safe title matching
-        # and exact Steam App ID verification.
         if candidates:
             candidate_names = [candidate["game_name"] for candidate in candidates]
-
             print(f"HLTB needs review: {game_name}")
-
             print(f"  Queries tried: {attempted_queries}")
-
             print(f"  Candidates: {candidate_names}")
 
             return {
@@ -1373,9 +1362,7 @@ def get_hltb_data(
                 "candidates": candidates,
             }
 
-        # Nothing usable was found at all.
         print(f"HLTB no usable match: {game_name}")
-
         print(f"  Queries tried: {attempted_queries}")
 
         return {
@@ -1387,13 +1374,14 @@ def get_hltb_data(
     finally:
         game_seconds = time.perf_counter() - game_start
 
-        with HLTB_STATS_LOCK:
-            HLTB_STATS["games_attempted"] += 1
-            HLTB_STATS["game_seconds"] += game_seconds
-            games_attempted = HLTB_STATS["games_attempted"]
+        if cancel_requested is None or not cancel_requested():
+            with HLTB_STATS_LOCK:
+                HLTB_STATS["games_attempted"] += 1
+                HLTB_STATS["game_seconds"] += game_seconds
+                games_attempted = HLTB_STATS["games_attempted"]
 
-        if game_seconds >= 5:
-            print(f"HLTB slow game: {game_name} ({game_seconds:.1f}s)")
+            if game_seconds >= 5:
+                print(f"HLTB slow game: {game_name} ({game_seconds:.1f}s)")
 
-        if games_attempted % 100 == 0:
-            print_hltb_stats()
+            if games_attempted % 100 == 0:
+                print_hltb_stats()

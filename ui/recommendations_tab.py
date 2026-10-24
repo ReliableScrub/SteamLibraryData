@@ -8,13 +8,13 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRunnable,
     Qt,
+    QThread,
     QThreadPool,
     QUrl,
     Signal,
 )
 from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QCompleter,
     QDoubleSpinBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QSplitter,
     QTabWidget,
     QTextBrowser,
@@ -39,6 +40,8 @@ from recommendations.similar import SimilarGameIndex
 from storage.image_cache import get_cached_image_path, get_game_image
 from ui.genre_tag_filter import GenreTagFilterWidget
 from ui.trailer_player import TrailerPlayer
+from workers import RecommendationBuildWorker
+
 
 FOR_YOU_LIMIT = 10
 SIMILAR_SEARCH_LIMIT = 250
@@ -74,6 +77,8 @@ class ImageWorker(QRunnable):
 
 
 class RecommendationsTab(QWidget):
+    build_busy_changed = Signal(bool)
+
     def __init__(self, games, parent=None):
         super().__init__(parent)
 
@@ -100,6 +105,9 @@ class RecommendationsTab(QWidget):
         self.image_requests_in_flight = set()
 
         self.recommendation_state = None
+        self.recommendation_thread = None
+        self.recommendation_worker = None
+        self._update_busy = False
 
         self._create_controls()
         self._create_layout()
@@ -174,7 +182,12 @@ class RecommendationsTab(QWidget):
         self.saved_status_label = QLabel("No saved recommendations.")
         self.saved_status_label.setWordWrap(True)
 
-        self.reload_button = QPushButton("Reload Saved Recommendations")
+        self.rebuild_button = QPushButton("Build Recommendations")
+
+        self.rebuild_progress = QProgressBar()
+        self.rebuild_progress.setRange(0, 0)
+        self.rebuild_progress.setTextVisible(False)
+        self.rebuild_progress.setVisible(False)
 
         self.for_you_image = QLabel("No recommendation selected")
         self.for_you_image.setFixedSize(CARD_IMAGE_WIDTH, CARD_IMAGE_HEIGHT)
@@ -225,7 +238,9 @@ class RecommendationsTab(QWidget):
 
         self.find_similar_button = QPushButton("Find Similar Backlog Games")
 
-        self.similar_status_label = QLabel("Choose any owned game with genre/tag data.")
+        self.similar_status_label = QLabel(
+            "Choose any owned game with genre/tag data."
+        )
         self.similar_status_label.setWordWrap(True)
 
         self.similar_result_combo = QComboBox()
@@ -271,13 +286,7 @@ class RecommendationsTab(QWidget):
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setObjectName("recommendationMediaPanel")
 
-        app = QApplication.instance()
-
-        if app is not None:
-            palette = app.palette()
-        else:
-            palette = panel.palette()
-
+        palette = panel.palette()
         border_color = palette.color(QPalette.ColorRole.Mid).name()
         background_color = palette.color(QPalette.ColorRole.Base).name()
 
@@ -288,13 +297,6 @@ class RecommendationsTab(QWidget):
             f" background-color: {background_color};"
             "}"
         )
-
-    def refresh_theme(self):
-        self._style_media_panel(self.for_you_left_panel)
-        self._style_media_panel(self.similar_left_panel)
-
-        self.for_you_left_panel.update()
-        self.similar_left_panel.update()
 
     @staticmethod
     def _style_details_browser(browser):
@@ -377,9 +379,10 @@ class RecommendationsTab(QWidget):
             1,
         )
 
-        status_row.addWidget(self.reload_button)
+        status_row.addWidget(self.rebuild_button)
 
         layout.addLayout(status_row)
+        layout.addWidget(self.rebuild_progress)
 
         help_label = QLabel(
             "Browse up to ten personalized picks. "
@@ -554,9 +557,11 @@ class RecommendationsTab(QWidget):
         self.hltb_max_filter.valueChanged.connect(self._hltb_max_changed)
         self.clear_filters_button.clicked.connect(self.clear_filters)
 
-        self.reload_button.clicked.connect(self.refresh)
+        self.rebuild_button.clicked.connect(self.rebuild_recommendations)
 
-        self.for_you_steam_button.clicked.connect(self._open_selected_for_you_steam)
+        self.for_you_steam_button.clicked.connect(
+            self._open_selected_for_you_steam
+        )
         self.for_you_previous_button.clicked.connect(self.previous_for_you)
         self.for_you_next_button.clicked.connect(self.next_for_you)
 
@@ -566,7 +571,9 @@ class RecommendationsTab(QWidget):
             self._similar_result_changed
         )
 
-        self.similar_steam_button.clicked.connect(self._open_selected_similar_steam)
+        self.similar_steam_button.clicked.connect(
+            self._open_selected_similar_steam
+        )
 
         self.mode_tabs.currentChanged.connect(self._mode_changed)
 
@@ -634,6 +641,82 @@ class RecommendationsTab(QWidget):
         )
 
         self._rebuild_for_you()
+        self._update_rebuild_controls()
+
+    def recommendation_build_running(self):
+        return (
+            self.recommendation_thread is not None
+            and self.recommendation_thread.isRunning()
+        )
+
+    def set_update_busy(self, busy):
+        self._update_busy = bool(busy)
+        self._update_rebuild_controls()
+
+    def _update_rebuild_controls(self):
+        building = self.recommendation_build_running()
+
+        self.rebuild_progress.setVisible(building)
+        self.rebuild_button.setEnabled(not building and not self._update_busy)
+
+        if building:
+            self.rebuild_button.setText("Rebuilding Recommendations...")
+        elif self.recommendation_state is None:
+            self.rebuild_button.setText("Build Recommendations")
+        else:
+            self.rebuild_button.setText("Rebuild Recommendations")
+
+    def rebuild_recommendations(self):
+        if self._update_busy or self.recommendation_build_running():
+            return
+
+        self.saved_status_label.setText("Building personalized recommendations...")
+
+        self.recommendation_thread = QThread(self)
+        self.recommendation_worker = RecommendationBuildWorker()
+        self.recommendation_worker.moveToThread(self.recommendation_thread)
+
+        self.recommendation_thread.started.connect(self.recommendation_worker.run)
+        self.recommendation_worker.succeeded.connect(
+            self._recommendations_rebuilt
+        )
+        self.recommendation_worker.failed.connect(
+            self._recommendations_rebuild_failed
+        )
+        self.recommendation_worker.finished.connect(
+            self.recommendation_thread.quit
+        )
+        self.recommendation_worker.finished.connect(
+            self.recommendation_worker.deleteLater
+        )
+        self.recommendation_thread.finished.connect(
+            self._recommendation_thread_finished
+        )
+        self.recommendation_thread.finished.connect(
+            self.recommendation_thread.deleteLater
+        )
+
+        self.build_busy_changed.emit(True)
+        self.recommendation_thread.start()
+        self._update_rebuild_controls()
+
+    def _recommendations_rebuilt(self):
+        self.refresh()
+
+    def _recommendations_rebuild_failed(self, message):
+        self.saved_status_label.setText("Recommendation rebuild failed.")
+
+        QMessageBox.warning(
+            self,
+            "Recommendations",
+            message,
+        )
+
+    def _recommendation_thread_finished(self):
+        self.recommendation_worker = None
+        self.recommendation_thread = None
+        self._update_rebuild_controls()
+        self.build_busy_changed.emit(False)
 
     def _filters_changed(self):
         self._rebuild_for_you()
@@ -745,7 +828,9 @@ class RecommendationsTab(QWidget):
         previous_app_id = None
 
         if 0 <= self.current_for_you_index < len(self.for_you_records):
-            previous_app_id = self.for_you_records[self.current_for_you_index]["app_id"]
+            previous_app_id = self.for_you_records[
+                self.current_for_you_index
+            ]["app_id"]
 
         self._cancel_for_you_animation()
 
@@ -755,8 +840,8 @@ class RecommendationsTab(QWidget):
                 "Recommendations have not been generated yet."
             )
             self._clear_for_you_card(
-                "Generate recommendations from the data/maintenance controls "
-                "to create a personalized backlog shortlist.",
+                "Use Build Recommendations above to create a personalized "
+                "backlog shortlist from your current ratings and library data.",
                 title="No recommendation build yet",
             )
             return
@@ -934,7 +1019,9 @@ class RecommendationsTab(QWidget):
             f"genre:{genre.casefold()}" for genre in (game.genres or []) if genre
         }
 
-        features.update({f"tag:{tag.casefold()}" for tag in (game.tags or {}) if tag})
+        features.update(
+            {f"tag:{tag.casefold()}" for tag in (game.tags or {}) if tag}
+        )
 
         return features
 
@@ -960,9 +1047,13 @@ class RecommendationsTab(QWidget):
             self.for_you_image,
         )
 
-        self.for_you_hltb.setText(self._hltb_text(game))
+        self.for_you_hltb.setText(
+            self._hltb_text(game)
+        )
 
-        self.for_you_trailer_player.set_game(game.app_id)
+        self.for_you_trailer_player.set_game(
+            game.app_id
+        )
 
         self.for_you_steam_button.setEnabled(True)
 
@@ -972,9 +1063,13 @@ class RecommendationsTab(QWidget):
 
         navigation_enabled = total > 1
 
-        self.for_you_previous_button.setEnabled(navigation_enabled)
+        self.for_you_previous_button.setEnabled(
+            navigation_enabled
+        )
 
-        self.for_you_next_button.setEnabled(navigation_enabled)
+        self.for_you_next_button.setEnabled(
+            navigation_enabled
+        )
 
         self.for_you_title.setText(game.name)
 
@@ -1014,7 +1109,9 @@ class RecommendationsTab(QWidget):
         self.for_you_image.setProperty("image_path", None)
         self.for_you_image.setText(title)
 
-        self.for_you_hltb.setText(self._empty_hltb_text())
+        self.for_you_hltb.setText(
+            self._empty_hltb_text()
+        )
 
         self.for_you_trailer_player.clear_game()
 
@@ -1036,9 +1133,13 @@ class RecommendationsTab(QWidget):
         if self._for_you_animation is not None:
             return
 
-        new_index = (self.current_for_you_index - 1) % len(self.for_you_records)
+        new_index = (
+            self.current_for_you_index - 1
+        ) % len(self.for_you_records)
 
-        self._animate_to_for_you_index(new_index)
+        self._animate_to_for_you_index(
+            new_index
+        )
 
     def next_for_you(self):
         if len(self.for_you_records) <= 1:
@@ -1047,9 +1148,13 @@ class RecommendationsTab(QWidget):
         if self._for_you_animation is not None:
             return
 
-        new_index = (self.current_for_you_index + 1) % len(self.for_you_records)
+        new_index = (
+            self.current_for_you_index + 1
+        ) % len(self.for_you_records)
 
-        self._animate_to_for_you_index(new_index)
+        self._animate_to_for_you_index(
+            new_index
+        )
 
     def _animate_to_for_you_index(self, index):
         if not 0 <= index < len(self.for_you_records):
@@ -1060,11 +1165,15 @@ class RecommendationsTab(QWidget):
 
         self.for_you_trailer_player.stop()
 
-        effect = QGraphicsOpacityEffect(self.for_you_left_panel)
+        effect = QGraphicsOpacityEffect(
+            self.for_you_left_panel
+        )
 
         effect.setOpacity(1.0)
 
-        self.for_you_left_panel.setGraphicsEffect(effect)
+        self.for_you_left_panel.setGraphicsEffect(
+            effect
+        )
 
         self._for_you_effect = effect
 
@@ -1077,11 +1186,17 @@ class RecommendationsTab(QWidget):
         animation.setDuration(120)
         animation.setStartValue(1.0)
         animation.setEndValue(0.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setEasingCurve(
+            QEasingCurve.Type.OutCubic
+        )
 
         self._for_you_animation = animation
 
-        animation.finished.connect(lambda: self._for_you_fade_out_finished(index))
+        animation.finished.connect(
+            lambda: self._for_you_fade_out_finished(
+                index
+            )
+        )
 
         animation.start()
 
@@ -1107,11 +1222,15 @@ class RecommendationsTab(QWidget):
         animation.setDuration(150)
         animation.setStartValue(0.0)
         animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setEasingCurve(
+            QEasingCurve.Type.OutCubic
+        )
 
         self._for_you_animation = animation
 
-        animation.finished.connect(self._for_you_fade_in_finished)
+        animation.finished.connect(
+            self._for_you_fade_in_finished
+        )
 
         animation.start()
 
@@ -1123,7 +1242,9 @@ class RecommendationsTab(QWidget):
         if self._for_you_effect is None:
             return
 
-        self.for_you_left_panel.setGraphicsEffect(None)
+        self.for_you_left_panel.setGraphicsEffect(
+            None
+        )
 
         self._for_you_effect = None
 
@@ -1136,7 +1257,9 @@ class RecommendationsTab(QWidget):
         if self._for_you_effect is None:
             return
 
-        self.for_you_left_panel.setGraphicsEffect(None)
+        self.for_you_left_panel.setGraphicsEffect(
+            None
+        )
 
         self._for_you_effect = None
 
@@ -1144,7 +1267,9 @@ class RecommendationsTab(QWidget):
         if not 0 <= self.current_for_you_index < len(self.for_you_records):
             return
 
-        app_id = self.for_you_records[self.current_for_you_index]["app_id"]
+        app_id = self.for_you_records[
+            self.current_for_you_index
+        ]["app_id"]
 
         self._open_steam_page(app_id)
 
@@ -1165,8 +1290,8 @@ class RecommendationsTab(QWidget):
             feature_version,
             _generated_at,
             training_game_count,
-            _rated_game_count,
-            _implicit_game_count,
+            rated_game_count,
+            implicit_game_count,
             candidate_game_count,
         ) = state
 
@@ -1175,6 +1300,8 @@ class RecommendationsTab(QWidget):
             f" • {eligible_count} match filters"
             f" • showing {showing_count}"
             f" • {candidate_game_count} candidates scored"
+            f" • {rated_game_count} rated games"
+            f" • {implicit_game_count} implicit-only games"
             f" • {method}"
             f" • model {model_version}"
             f" • features {feature_version}"
@@ -1422,9 +1549,7 @@ class RecommendationsTab(QWidget):
 
             reference_game = self.games_by_id.get(self.similar_reference_app_id)
             reference_name = (
-                reference_game.name
-                if reference_game is not None
-                else "the selected game"
+                reference_game.name if reference_game is not None else "the selected game"
             )
 
             self.similar_status_label.setText(
@@ -1460,7 +1585,8 @@ class RecommendationsTab(QWidget):
                 continue
 
             display_text = (
-                f"{game.name} — {self._friendly_score(score.adjusted_similarity)}"
+                f"{game.name} — "
+                f"{self._friendly_score(score.adjusted_similarity)}"
             )
 
             self.similar_result_combo.addItem(
@@ -1575,9 +1701,13 @@ class RecommendationsTab(QWidget):
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
-        similarity_label = self._similarity_match_label(score.adjusted_similarity)
+        similarity_label = self._similarity_match_label(
+            score.adjusted_similarity
+        )
 
-        similarity_text = self._friendly_score(score.adjusted_similarity)
+        similarity_text = self._friendly_score(
+            score.adjusted_similarity
+        )
 
         self.similar_summary.setText(
             f"<span style='font-size: 12pt; font-weight: 600;'>"
@@ -1638,7 +1768,9 @@ class RecommendationsTab(QWidget):
 
         self.similar_steam_button.setEnabled(True)
 
-        self.similar_trailer_player.set_game(game.app_id)
+        self.similar_trailer_player.set_game(
+            game.app_id
+        )
 
         self.similar_image.setProperty(
             "steam_app_id",
@@ -1650,11 +1782,7 @@ class RecommendationsTab(QWidget):
             self.similar_image,
         )
 
-    def _clear_similar_card(
-        self,
-        message="Choose a reference game to find similar backlog games.",
-        title="No similar game selected",
-    ):
+    def _clear_similar_card(self, message="Choose a reference game to find similar backlog games.", title="No similar game selected"):
         self.similar_image.setProperty(
             "steam_app_id",
             None,
@@ -1869,12 +1997,12 @@ class RecommendationsTab(QWidget):
 
     def _mode_changed(self, index):
         if index == 0:
-            self.similar_trailer_player.stop()
+            self.similar_trailer_player.pause()
         else:
-            self.for_you_trailer_player.stop()
+            self.for_you_trailer_player.pause()
 
     def hideEvent(self, event):
-        self.for_you_trailer_player.stop()
-        self.similar_trailer_player.stop()
+        self.for_you_trailer_player.pause()
+        self.similar_trailer_player.pause()
 
         super().hideEvent(event)
