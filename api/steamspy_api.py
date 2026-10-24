@@ -76,7 +76,31 @@ def get_game_metadata(app_id):
     elif not isinstance(genre_text, str):
         raise SteamSpyResponseError("SteamSpy returned unexpected genre data.")
 
-    genres = [genre.strip() for genre in genre_text.split(",") if genre.strip()]
+    canonical_genres = {
+        "free to play": "Free To Play",
+    }
+
+    genres = []
+    seen_genres = set()
+
+    for genre in genre_text.split(","):
+        genre = " ".join(genre.split())
+
+        if not genre:
+            continue
+
+        genre = canonical_genres.get(
+            genre.casefold(),
+            genre,
+        )
+
+        genre_key = genre.casefold()
+
+        if genre_key in seen_genres:
+            continue
+
+        seen_genres.add(genre_key)
+        genres.append(genre)
 
     tags = data.get("tags")
 
@@ -89,4 +113,43 @@ def get_game_metadata(app_id):
     elif not isinstance(tags, dict):
         raise SteamSpyResponseError("SteamSpy returned unexpected tag data.")
 
-    return genres, tags
+    positive = data.get("positive")
+    negative = data.get("negative")
+
+    if positive is not None:
+        if isinstance(positive, bool):
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected positive-review data."
+            )
+
+        try:
+            positive = int(positive)
+        except (TypeError, ValueError) as error:
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected positive-review data."
+            ) from error
+
+        if positive < 0:
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected positive-review data."
+            )
+
+    if negative is not None:
+        if isinstance(negative, bool):
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected negative-review data."
+            )
+
+        try:
+            negative = int(negative)
+        except (TypeError, ValueError) as error:
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected negative-review data."
+            ) from error
+
+        if negative < 0:
+            raise SteamSpyResponseError(
+                "SteamSpy returned unexpected negative-review data."
+            )
+
+    return genres, tags, positive, negative

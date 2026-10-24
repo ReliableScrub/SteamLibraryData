@@ -17,6 +17,9 @@ class Game:
     tags: dict[str, int] = field(default_factory=dict)
 
     metadata_checked: bool = False
+    metadata_updated_at: int | None = None
+    steamspy_positive: int | None = None
+    steamspy_negative: int | None = None
 
     hltb_main: float | None = None
     hltb_main_extra: float | None = None
@@ -31,6 +34,7 @@ class Game:
     hltb_match_status: str | None = None
 
     hltb_checked: bool = False
+    hltb_updated_at: int | None = None
 
     achievement_total: int | None = None
     achievements_unlocked: int | None = None

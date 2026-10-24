@@ -31,6 +31,7 @@ from game_updates import (
     update_hltb,
     update_metadata,
 )
+from recommendations.baseline import PUBLIC_RECEPTION_MIN_REVIEWS
 from storage.database import (
     clear_game_rating,
     get_game_rating,
@@ -230,8 +231,10 @@ class LibraryTab(QWidget):
                 "All Types",
                 "Backlog Eligible",
                 "Game",
-                "Unknown",
+                "Unknown (Game)",
                 "Software",
+                "Unknown (Software)",
+                "Unknown",
                 "DLC",
                 "Video",
                 "Hardware",
@@ -357,7 +360,7 @@ class LibraryTab(QWidget):
         self.game_table_model = GameTableModel(self.filtered_games, self)
 
         self.game_table_model.set_steam_type_resolver(
-            self.genre_tag_filter.inferred_steam_type
+            self.genre_tag_filter.display_steam_type
         )
 
         self.game_table_model.set_ratings(load_game_ratings())
@@ -649,9 +652,7 @@ class LibraryTab(QWidget):
         self.splitter.splitterMoved.connect(self.update_media_sizes)
         self.rating_filter.currentTextChanged.connect(self.apply_filters)
 
-        self.advanced_toggle_button.toggled.connect(
-            self._advanced_expanded_changed
-        )
+        self.advanced_toggle_button.toggled.connect(self._advanced_expanded_changed)
         self.advanced_clear_button.clicked.connect(self.clear_advanced_filters)
 
         self.achievement_filter.currentTextChanged.connect(
@@ -690,6 +691,7 @@ class LibraryTab(QWidget):
             self.selected_game.app_id if self.selected_game is not None else None
         )
 
+        self.genre_tag_filter.set_available_from_games(self.games)
         self.apply_filters()
 
         if selected_app_id is None:
@@ -868,8 +870,7 @@ class LibraryTab(QWidget):
         self.achievement_remaining_filter.setEnabled(uses_remaining)
 
         custom_hltb = (
-            self.playtime_hltb_filter.currentText()
-            == "Custom % of Completionist"
+            self.playtime_hltb_filter.currentText() == "Custom % of Completionist"
         )
 
         self.playtime_hltb_percent_label.setEnabled(custom_hltb)
@@ -968,9 +969,7 @@ class LibraryTab(QWidget):
             if completionist is None or completionist <= 0:
                 return False
 
-            target = completionist * (
-                self.playtime_hltb_percent_filter.value() / 100
-            )
+            target = completionist * (self.playtime_hltb_percent_filter.value() / 100)
 
         else:
             return True
@@ -1017,9 +1016,7 @@ class LibraryTab(QWidget):
             return True
 
         all_checked = (
-            game.hltb_checked
-            and game.metadata_checked
-            and game.achievements_checked
+            game.hltb_checked and game.metadata_checked and game.achievements_checked
         )
 
         if mode == "All enrichment checked":
@@ -1095,25 +1092,19 @@ class LibraryTab(QWidget):
         # 2. STEAM TYPE FILTER
         if selected_type == "Backlog Eligible":
             filtered_games = [
-                game for game in filtered_games if game.is_backlog_eligible()
+                game
+                for game in filtered_games
+                if self.genre_tag_filter.is_backlog_eligible(game)
             ]
 
         elif selected_type != "All Types":
-            type_values = {
-                "Game": "game",
-                "Unknown": "unknown",
-                "Software": "software",
-                "DLC": "dlc",
-                "Video": "video",
-                "Hardware": "hardware",
-            }
-
-            steam_type = type_values[selected_type]
-
             filtered_games = [
                 game
                 for game in filtered_games
-                if self.genre_tag_filter.inferred_steam_type(game) == steam_type
+                if self.genre_tag_filter.matches_type_filter(
+                    game,
+                    selected_type,
+                )
             ]
 
         # 3. HLTB LENGTH FILTER
@@ -1167,9 +1158,7 @@ class LibraryTab(QWidget):
         now = time.time()
 
         filtered_games = [
-            game
-            for game in filtered_games
-            if self._matches_advanced_filters(game, now)
+            game for game in filtered_games if self._matches_advanced_filters(game, now)
         ]
 
         # 7. SEARCH
@@ -1192,6 +1181,27 @@ class LibraryTab(QWidget):
         # 9. PUSH RESULT INTO TABLE
         self.filtered_games = filtered_games
         self.game_table_model.set_games(filtered_games)
+
+    @staticmethod
+    def _public_reception_text(game):
+        positive = game.steamspy_positive
+        negative = game.steamspy_negative
+
+        if positive is None or negative is None:
+            return "Not fetched"
+
+        total = positive + negative
+
+        if total == 0:
+            return "No reviews"
+
+        percent = positive / total * 100
+        text = f"{percent:.0f}% positive ({total:,} reviews)"
+
+        if total < PUBLIC_RECEPTION_MIN_REVIEWS:
+            text += " — Too few reviews to affect recommendations"
+
+        return text
 
     def show_selected_game(self):
         row = self.table.currentIndex().row()
@@ -1274,9 +1284,20 @@ class LibraryTab(QWidget):
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
 
+        reception_text = self._public_reception_text(game)
+
         self.game_details.setText(
-            f"Last played: {last_played_text}\nLast 2 weeks: {recent_activity_text}\n\nSteam Playtime: {playtime_hours:.1f} hours\nSteam Type: {steam_type_text}\nHLTB ({hltb_metric}): {hltb_text}\nAchievements: {achievement_text}\n\nGenres: {genres}\n\nTags: {tags}"
+            f"Last played: {last_played_text}\n"
+            f"Last 2 weeks: {recent_activity_text}\n\n"
+            f"Steam Playtime: {playtime_hours:.1f} hours\n"
+            f"Steam Type: {steam_type_text}\n"
+            f"Public Reception: {reception_text}\n"
+            f"HLTB ({hltb_metric}): {hltb_text}\n"
+            f"Achievements: {achievement_text}\n\n"
+            f"Genres: {genres}\n\n"
+            f"Tags: {tags}"
         )
+
         self.steam_page_button.setEnabled(True)
         self.selected_refresh_status.setText("")
         self._update_selected_refresh_enabled()
@@ -1701,9 +1722,7 @@ class LibraryTab(QWidget):
         layout = self.details_content.layout()
         margins = layout.contentsMargins()
         available_width = (
-            self.details_panel.viewport().width()
-            - margins.left()
-            - margins.right()
+            self.details_panel.viewport().width() - margins.left() - margins.right()
         )
 
         media_width = min(max(available_width, 1), 520)
@@ -1728,9 +1747,7 @@ class LibraryTab(QWidget):
         detail_size = 12 if wide else 11
         label_size = 11 if wide else 10
 
-        self.game_title.setStyleSheet(
-            f"font-size: {title_size}pt; font-weight: bold;"
-        )
+        self.game_title.setStyleSheet(f"font-size: {title_size}pt; font-weight: bold;")
         self.game_details.setStyleSheet(f"font-size: {detail_size}pt;")
         self.status_label.setStyleSheet(f"font-size: {label_size}pt;")
         self.status_value.setStyleSheet(f"font-size: {label_size}pt;")
@@ -1873,19 +1890,21 @@ class LibraryTab(QWidget):
 
         if column == 7:
             type_order = {
-                "game": 0,
-                "unknown": 1,
-                "software": 2,
-                "dlc": 3,
-                "video": 4,
-                "hardware": 5,
+                "Game": 0,
+                "Unknown (Game)": 1,
+                "Unknown": 2,
+                "Software": 3,
+                "Unknown (Software)": 4,
+                "DLC": 5,
+                "Video": 6,
+                "Hardware": 7,
             }
 
             return sorted(
                 games,
                 key=lambda game: (
                     type_order.get(
-                        game.steam_type,
+                        self.genre_tag_filter.display_steam_type(game),
                         99,
                     ),
                     game.name.lower(),

@@ -2,298 +2,121 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-GENRE_ALIASES = {
+GENRE_CANONICAL_NAMES = {
     "free to play": "Free To Play",
 }
 
 
-def canonicalize_genre(genre):
-    if not genre:
+def canonical_genre_name(name):
+    if not isinstance(name, str):
         return ""
 
-    cleaned = genre.strip()
+    cleaned = " ".join(name.split())
 
-    return GENRE_ALIASES.get(cleaned.casefold(), cleaned)
+    if not cleaned:
+        return ""
+
+    return GENRE_CANONICAL_NAMES.get(
+        cleaned.casefold(),
+        cleaned,
+    )
 
 
-class SearchableMultiSelectDialog(QDialog):
-    def __init__(
-        self,
-        title,
-        values,
-        selected_values=None,
-        parent=None,
-    ):
+def canonical_feature_key(name):
+    if not isinstance(name, str):
+        return ""
+
+    return " ".join(name.split()).casefold()
+
+
+class _SearchableCheckList(QWidget):
+    selection_changed = Signal()
+
+    def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle(title)
-        self.resize(420, 520)
+        self._available = []
+        self._selected = set()
+        self._syncing = False
 
-        self.values = list(values)
-        self.initial_selected_values = set(selected_values or ())
-
-        self._create_controls()
-        self._create_layout()
-        self._connect_signals()
-        self._populate_list()
-
-    def _create_controls(self):
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search...")
 
         self.list_widget = QListWidget()
-
-        self.clear_button = QPushButton("Clear Selection")
-
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-
-    def _create_layout(self):
-        layout = QVBoxLayout(self)
-
-        layout.addWidget(self.search_box)
-        layout.addWidget(self.list_widget, 1)
-        layout.addWidget(self.clear_button)
-        layout.addWidget(self.button_box)
-
-    def _connect_signals(self):
-        self.search_box.textChanged.connect(self._apply_search_filter)
-        self.clear_button.clicked.connect(self._clear_selection)
-        self.button_box.accepted.connect(self.accept)
-        self.button_box.rejected.connect(self.reject)
-        self.list_widget.itemDoubleClicked.connect(self._toggle_item)
-
-    def _populate_list(self):
-        self.list_widget.clear()
-
-        for value in self.values:
-            item = QListWidgetItem(value)
-
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-
-            if value in self.initial_selected_values:
-                item.setCheckState(Qt.CheckState.Checked)
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-
-            self.list_widget.addItem(item)
-
-    def _apply_search_filter(self, text):
-        search_text = text.strip().casefold()
-
-        for index in range(self.list_widget.count()):
-            item = self.list_widget.item(index)
-
-            item.setHidden(
-                bool(search_text) and search_text not in item.text().casefold()
-            )
-
-    def _clear_selection(self):
-        for index in range(self.list_widget.count()):
-            item = self.list_widget.item(index)
-            item.setCheckState(Qt.CheckState.Unchecked)
-
-    def selected_values(self):
-        selected = []
-
-        for index in range(self.list_widget.count()):
-            item = self.list_widget.item(index)
-
-            if item.checkState() == Qt.CheckState.Checked:
-                selected.append(item.text())
-
-        return tuple(selected)
-
-    def _toggle_item(self, item):
-        if item.checkState() == Qt.CheckState.Checked:
-            item.setCheckState(Qt.CheckState.Unchecked)
-        else:
-            item.setCheckState(Qt.CheckState.Checked)
-
-
-class GenreSelectDialog(QDialog):
-    def __init__(
-        self,
-        game_genres,
-        software_genres,
-        selected_game_genres=None,
-        selected_software_genres=None,
-        parent=None,
-    ):
-        super().__init__(parent)
-
-        self.setWindowTitle("Choose Genres")
-        self.resize(520, 600)
-
-        self._changing_selection = False
-
-        selected_game_genres = set(selected_game_genres or ())
-
-        selected_software_genres = set(selected_software_genres or ())
-
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search genres...")
-
-        self.game_list = QListWidget()
-        self.software_list = QListWidget()
-
-        self.clear_button = QPushButton("Clear Selection")
-
-        self.button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-
-        for genre in game_genres:
-            self._add_genre_item(
-                self.game_list,
-                genre,
-                selected_game_genres,
-            )
-
-        for genre in software_genres:
-            self._add_genre_item(
-                self.software_list,
-                genre,
-                selected_software_genres,
-            )
+        self.list_widget.itemChanged.connect(self._item_changed)
+        self.search_box.textChanged.connect(self._apply_search)
 
         layout = QVBoxLayout(self)
-
+        layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self.search_box)
+        layout.addWidget(self.list_widget)
 
-        layout.addWidget(QLabel("Game Genres"))
-        layout.addWidget(self.game_list, 1)
+    def selected(self):
+        return set(self._selected)
 
-        layout.addWidget(QLabel("Software Genres"))
-        layout.addWidget(self.software_list, 1)
+    def set_selected(self, values):
+        self._selected = set(values) & set(self._available)
+        self._rebuild()
 
-        layout.addWidget(self.clear_button)
-        layout.addWidget(self.button_box)
+    def set_available(self, values):
+        previous = set(self._selected)
+        self._available = sorted(set(values), key=str.casefold)
+        self._selected = previous & set(self._available)
+        self._rebuild()
 
-        self.search_box.textChanged.connect(self._apply_search_filter)
-
-        self.game_list.itemChanged.connect(
-            lambda item: self._genre_checked(
-                item,
-                self.software_list,
-            )
-        )
-
-        self.software_list.itemChanged.connect(
-            lambda item: self._genre_checked(
-                item,
-                self.game_list,
-            )
-        )
-
-        self.game_list.itemDoubleClicked.connect(self._toggle_item)
-
-        self.software_list.itemDoubleClicked.connect(self._toggle_item)
-
-        self.clear_button.clicked.connect(self._clear_selection)
-
-        self.button_box.accepted.connect(self.accept)
-
-        self.button_box.rejected.connect(self.reject)
-
-    @staticmethod
-    def _add_genre_item(
-        list_widget,
-        genre,
-        selected_values,
-    ):
-        item = QListWidgetItem(genre)
-
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-
-        if genre in selected_values:
-            item.setCheckState(Qt.CheckState.Checked)
-        else:
-            item.setCheckState(Qt.CheckState.Unchecked)
-
-        list_widget.addItem(item)
-
-    def _genre_checked(
-        self,
-        item,
-        other_list,
-    ):
-        if self._changing_selection:
+    def clear_selection(self):
+        if not self._selected:
             return
 
-        if item.checkState() != Qt.CheckState.Checked:
-            return
+        self._selected.clear()
+        self._rebuild()
+        self.selection_changed.emit()
 
-        self._changing_selection = True
+    def _rebuild(self):
+        search_text = self.search_box.text().strip().casefold()
+        self._syncing = True
 
         try:
-            for index in range(other_list.count()):
-                other_list.item(index).setCheckState(Qt.CheckState.Unchecked)
-        finally:
-            self._changing_selection = False
+            self.list_widget.clear()
 
-    def _apply_search_filter(self, text):
-        search_text = text.strip().casefold()
+            for value in self._available:
+                if search_text and search_text not in value.casefold():
+                    continue
 
-        for list_widget in (
-            self.game_list,
-            self.software_list,
-        ):
-            for index in range(list_widget.count()):
-                item = list_widget.item(index)
-
-                item.setHidden(
-                    bool(search_text) and search_text not in item.text().casefold()
+                item = QListWidgetItem(value)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if value in self._selected
+                    else Qt.CheckState.Unchecked
                 )
+                self.list_widget.addItem(item)
 
-    def _clear_selection(self):
-        self._changing_selection = True
-
-        try:
-            for list_widget in (
-                self.game_list,
-                self.software_list,
-            ):
-                for index in range(list_widget.count()):
-                    list_widget.item(index).setCheckState(Qt.CheckState.Unchecked)
         finally:
-            self._changing_selection = False
+            self._syncing = False
 
-    def selected_game_genres(self):
-        return self._selected_values(self.game_list)
+    def _apply_search(self, _text):
+        self._rebuild()
 
-    def selected_software_genres(self):
-        return self._selected_values(self.software_list)
+    def _item_changed(self, item):
+        if self._syncing:
+            return
 
-    @staticmethod
-    def _selected_values(list_widget):
-        selected = []
-
-        for index in range(list_widget.count()):
-            item = list_widget.item(index)
-
-            if item.checkState() == Qt.CheckState.Checked:
-                selected.append(item.text())
-
-        return tuple(selected)
-
-    @staticmethod
-    def _toggle_item(item):
         if item.checkState() == Qt.CheckState.Checked:
-            item.setCheckState(Qt.CheckState.Unchecked)
+            self._selected.add(item.text())
         else:
-            item.setCheckState(Qt.CheckState.Checked)
+            self._selected.discard(item.text())
+
+        self.selection_changed.emit()
 
 
 class GenreTagFilterWidget(QWidget):
@@ -310,232 +133,21 @@ class GenreTagFilterWidget(QWidget):
         self._selected_software_genres = set()
         self._selected_tags = set()
 
-        self._software_genre_keys = set()
-        self._software_tag_keys = set()
+        self._software_exclusive_genre_keys = set()
+        self._software_exclusive_tag_keys = set()
 
-        self._create_controls()
-        self._create_layout()
-        self._connect_signals()
-        self._update_button_text()
+        self.filter_button = QPushButton("Genres / Tags")
+        self.filter_button.clicked.connect(self._open_dialog)
 
-    def _create_controls(self):
-        self.genre_label = QLabel("Genre:")
-        self.genre_button = QPushButton()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.filter_button)
 
-        self.genre_button.setToolTip("An entry must contain all selected genres.")
+    def selected_game_genres(self):
+        return tuple(sorted(self._selected_game_genres, key=str.casefold))
 
-        self.tag_label = QLabel("Tags:")
-        self.tag_button = QPushButton()
-
-        self.tag_button.setToolTip("An entry must contain all selected tags.")
-
-        self.clear_button = QPushButton("Clear")
-        self.clear_button.setEnabled(False)
-
-    def _create_layout(self):
-        layout = QHBoxLayout(self)
-
-        layout.setContentsMargins(
-            0,
-            0,
-            0,
-            0,
-        )
-
-        layout.addWidget(self.genre_label)
-        layout.addWidget(self.genre_button)
-
-        layout.addSpacing(8)
-
-        layout.addWidget(self.tag_label)
-        layout.addWidget(self.tag_button)
-
-        layout.addWidget(self.clear_button)
-        layout.addStretch()
-
-    def _connect_signals(self):
-        self.genre_button.clicked.connect(self._choose_genres)
-
-        self.tag_button.clicked.connect(self._choose_tags)
-
-        self.clear_button.clicked.connect(self.clear_filters)
-
-    def set_available_options(
-        self,
-        game_genres,
-        software_genres,
-        tags,
-    ):
-        new_game_genres = sorted(
-            {canonicalize_genre(genre) for genre in game_genres if genre},
-            key=str.casefold,
-        )
-
-        game_genre_keys = {genre.casefold() for genre in new_game_genres}
-
-        new_software_genres = sorted(
-            {
-                canonicalize_genre(genre)
-                for genre in software_genres
-                if genre and canonicalize_genre(genre).casefold() not in game_genre_keys
-            },
-            key=str.casefold,
-        )
-
-        new_tags = sorted(
-            {tag for tag in tags if tag},
-            key=str.casefold,
-        )
-
-        old_selected_game_genres = set(self._selected_game_genres)
-
-        old_selected_software_genres = set(self._selected_software_genres)
-
-        old_selected_tags = set(self._selected_tags)
-
-        self._available_game_genres = new_game_genres
-
-        self._available_software_genres = new_software_genres
-
-        self._available_tags = new_tags
-
-        self._selected_game_genres.intersection_update(new_game_genres)
-
-        self._selected_software_genres.intersection_update(new_software_genres)
-
-        self._selected_tags.intersection_update(new_tags)
-
-        self._update_button_text()
-
-        if (
-            old_selected_game_genres != self._selected_game_genres
-            or old_selected_software_genres != self._selected_software_genres
-            or old_selected_tags != self._selected_tags
-        ):
-            self.filters_changed.emit()
-
-    def set_available_from_games(self, games):
-        official_game_genres = set()
-        official_software_genres = set()
-
-        official_game_tags = set()
-        official_software_tags = set()
-
-        all_tags = set()
-
-        for game in games:
-            genres = {
-                canonicalize_genre(genre) for genre in (game.genres or []) if genre
-            }
-
-            tags = {tag for tag in (game.tags or {}) if tag}
-
-            all_tags.update(tags)
-
-            if game.steam_type == "game":
-                official_game_genres.update(genres)
-
-                official_game_tags.update(tags)
-
-            elif game.steam_type == "software":
-                official_software_genres.update(genres)
-
-                official_software_tags.update(tags)
-
-        game_genre_keys = {genre.casefold() for genre in official_game_genres}
-
-        game_tag_keys = {tag.casefold() for tag in official_game_tags}
-
-        self._software_genre_keys = {
-            genre.casefold()
-            for genre in official_software_genres
-            if genre.casefold() not in game_genre_keys
-        }
-
-        self._software_tag_keys = {
-            tag.casefold()
-            for tag in official_software_tags
-            if tag.casefold() not in game_tag_keys
-        }
-
-        game_genres = set(official_game_genres)
-
-        software_genres = set(official_software_genres)
-
-        for game in games:
-            if game.steam_type != "unknown":
-                continue
-
-            inferred_type = self.inferred_steam_type(game)
-
-            genres = {
-                canonicalize_genre(genre) for genre in (game.genres or []) if genre
-            }
-
-            if inferred_type == "game":
-                game_genres.update(genres)
-
-            elif inferred_type == "software":
-                software_genres.update(genres)
-
-        self.set_available_options(
-            game_genres,
-            software_genres,
-            all_tags,
-        )
-
-    def inferred_steam_type(self, game):
-        if game.steam_type != "unknown":
-            return game.steam_type
-
-        if not getattr(
-            game,
-            "metadata_checked",
-            False,
-        ):
-            return "unknown"
-
-        genres = {
-            canonicalize_genre(genre).casefold()
-            for genre in (game.genres or [])
-            if genre
-        }
-
-        tags = {tag.casefold() for tag in (game.tags or {}) if tag}
-
-        if not genres and not tags:
-            return "unknown"
-
-        if genres & self._software_genre_keys:
-            return "software"
-
-        if tags & self._software_tag_keys:
-            return "software"
-
-        return "game"
-
-    def display_steam_type(self, game):
-        inferred_type = self.inferred_steam_type(game)
-
-        type_names = {
-            "game": "Game",
-            "software": "Software",
-            "dlc": "DLC",
-            "video": "Video",
-            "hardware": "Hardware",
-            "unknown": "Unknown",
-        }
-
-        if game.steam_type == "unknown" and inferred_type == "game":
-            return "Unknown (Game)"
-
-        if game.steam_type == "unknown" and inferred_type == "software":
-            return "Unknown (Software)"
-
-        return type_names.get(
-            game.steam_type,
-            "Unknown",
-        )
+    def selected_software_genres(self):
+        return tuple(sorted(self._selected_software_genres, key=str.casefold))
 
     def selected_genres(self):
         return tuple(
@@ -546,12 +158,7 @@ class GenreTagFilterWidget(QWidget):
         )
 
     def selected_tags(self):
-        return tuple(
-            sorted(
-                self._selected_tags,
-                key=str.casefold,
-            )
-        )
+        return tuple(sorted(self._selected_tags, key=str.casefold))
 
     def has_active_filters(self):
         return bool(
@@ -567,141 +174,333 @@ class GenreTagFilterWidget(QWidget):
         self._selected_game_genres.clear()
         self._selected_software_genres.clear()
         self._selected_tags.clear()
-
         self._update_button_text()
         self.filters_changed.emit()
 
-    def matches(
-        self,
-        genres,
-        tags,
-        steam_type=None,
-    ):
-        entry_genres = {canonicalize_genre(genre) for genre in (genres or []) if genre}
+    def set_available_from_games(self, games):
+        games = list(games)
 
-        if self._selected_game_genres:
-            if steam_type != "game":
-                return False
+        official_game_genres = {}
+        official_software_genres = {}
+        official_game_tags = {}
+        official_software_tags = {}
 
-            if not self._selected_game_genres.issubset(entry_genres):
-                return False
+        for game in games:
+            raw_type = getattr(game, "steam_type", "unknown") or "unknown"
 
-        if self._selected_software_genres:
-            if steam_type != "software":
-                return False
+            if raw_type not in {"game", "software"}:
+                continue
 
-            if not self._selected_software_genres.issubset(entry_genres):
-                return False
+            genre_target = (
+                official_game_genres if raw_type == "game" else official_software_genres
+            )
+            tag_target = (
+                official_game_tags if raw_type == "game" else official_software_tags
+            )
 
-        if isinstance(tags, dict):
-            entry_tags = set(tags.keys())
-        else:
-            entry_tags = set(tags or [])
+            for genre in getattr(game, "genres", []) or []:
+                display = canonical_genre_name(genre)
 
-        return not (
-            self._selected_tags and not self._selected_tags.issubset(entry_tags)
+                if display:
+                    genre_target.setdefault(
+                        canonical_feature_key(display),
+                        display,
+                    )
+
+            for tag in (getattr(game, "tags", {}) or {}).keys():
+                display = " ".join(tag.split())
+
+                if display:
+                    tag_target.setdefault(
+                        canonical_feature_key(display),
+                        display,
+                    )
+
+        game_genre_keys = set(official_game_genres)
+        software_genre_keys = set(official_software_genres)
+        game_tag_keys = set(official_game_tags)
+        software_tag_keys = set(official_software_tags)
+
+        self._software_exclusive_genre_keys = software_genre_keys - game_genre_keys
+        self._software_exclusive_tag_keys = software_tag_keys - game_tag_keys
+
+        game_genres = dict(official_game_genres)
+        software_genres = {
+            key: official_software_genres[key]
+            for key in self._software_exclusive_genre_keys
+        }
+        all_tags = {
+            **official_game_tags,
+            **official_software_tags,
+        }
+
+        for game in games:
+            inferred_type = self.inferred_steam_type(game)
+
+            if inferred_type == "game":
+                for genre in getattr(game, "genres", []) or []:
+                    display = canonical_genre_name(genre)
+
+                    if display:
+                        game_genres.setdefault(
+                            canonical_feature_key(display),
+                            display,
+                        )
+
+            elif inferred_type == "software":
+                for genre in getattr(game, "genres", []) or []:
+                    display = canonical_genre_name(genre)
+                    key = canonical_feature_key(display)
+
+                    if key in self._software_exclusive_genre_keys:
+                        software_genres.setdefault(key, display)
+
+            for tag in (getattr(game, "tags", {}) or {}).keys():
+                display = " ".join(tag.split())
+
+                if display:
+                    all_tags.setdefault(
+                        canonical_feature_key(display),
+                        display,
+                    )
+
+        self.set_available_options(
+            game_genres.values(),
+            software_genres.values(),
+            all_tags.values(),
         )
+
+    def set_available_options(self, game_genres, software_genres, tags):
+        game_genres = {
+            canonical_genre_name(value)
+            for value in game_genres
+            if canonical_genre_name(value)
+        }
+        software_genres = {
+            canonical_genre_name(value)
+            for value in software_genres
+            if canonical_genre_name(value)
+        }
+        tags = {
+            " ".join(value.split())
+            for value in tags
+            if isinstance(value, str) and value.strip()
+        }
+
+        self._selected_game_genres &= game_genres
+        self._selected_software_genres &= software_genres
+        self._selected_tags &= tags
+
+        self._available_game_genres = sorted(game_genres, key=str.casefold)
+        self._available_software_genres = sorted(
+            software_genres,
+            key=str.casefold,
+        )
+        self._available_tags = sorted(tags, key=str.casefold)
+        self._update_button_text()
+
+    def inferred_steam_type(self, game):
+        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
+
+        if raw_type != "unknown":
+            return raw_type
+
+        if not getattr(game, "metadata_checked", False):
+            return "unknown"
+
+        genre_keys = {
+            canonical_feature_key(canonical_genre_name(genre))
+            for genre in getattr(game, "genres", []) or []
+            if canonical_genre_name(genre)
+        }
+        tag_keys = {
+            canonical_feature_key(tag)
+            for tag in (getattr(game, "tags", {}) or {}).keys()
+            if canonical_feature_key(tag)
+        }
+
+        if (
+            genre_keys & self._software_exclusive_genre_keys
+            or tag_keys & self._software_exclusive_tag_keys
+        ):
+            return "software"
+
+        return "game"
+
+    def display_steam_type(self, game):
+        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
+
+        if raw_type == "unknown":
+            inferred = self.inferred_steam_type(game)
+
+            if inferred == "game":
+                return "Unknown (Game)"
+
+            if inferred == "software":
+                return "Unknown (Software)"
+
+            return "Unknown"
+
+        names = {
+            "game": "Game",
+            "software": "Software",
+            "dlc": "DLC",
+            "video": "Video",
+            "hardware": "Hardware",
+        }
+
+        return names.get(raw_type, raw_type.replace("_", " ").title())
+
+    def matches_type_filter(self, game, selected_type):
+        if selected_type == "All Types":
+            return True
+
+        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
+        inferred_type = self.inferred_steam_type(game)
+
+        if selected_type == "Game":
+            return raw_type == "game"
+
+        if selected_type == "Unknown (Game)":
+            return raw_type == "unknown" and inferred_type == "game"
+
+        if selected_type == "Software":
+            return raw_type == "software"
+
+        if selected_type == "Unknown (Software)":
+            return raw_type == "unknown" and inferred_type == "software"
+
+        if selected_type == "Unknown":
+            return raw_type == "unknown" and inferred_type == "unknown"
+
+        type_values = {
+            "DLC": "dlc",
+            "Video": "video",
+            "Hardware": "hardware",
+        }
+
+        wanted_type = type_values.get(selected_type)
+
+        if wanted_type is None:
+            return False
+
+        return raw_type == wanted_type
+
+    def is_backlog_eligible(self, game):
+        return self.inferred_steam_type(game) not in {
+            "software",
+            "dlc",
+            "video",
+            "hardware",
+        }
 
     def matches_game(self, game):
         return self.matches(
-            game.genres,
-            game.tags,
+            getattr(game, "genres", []) or [],
+            getattr(game, "tags", {}) or {},
             self.inferred_steam_type(game),
         )
 
-    def _choose_genres(self):
-        dialog = GenreSelectDialog(
-            game_genres=(self._available_game_genres),
-            software_genres=(self._available_software_genres),
-            selected_game_genres=(self._selected_game_genres),
-            selected_software_genres=(self._selected_software_genres),
-            parent=self,
+    def matches(self, genres, tags, steam_type):
+        genre_keys = {
+            canonical_feature_key(canonical_genre_name(genre))
+            for genre in genres
+            if canonical_genre_name(genre)
+        }
+        tag_keys = {
+            canonical_feature_key(tag) for tag in tags if canonical_feature_key(tag)
+        }
+
+        selected_game_genre_keys = {
+            canonical_feature_key(canonical_genre_name(genre))
+            for genre in self._selected_game_genres
+        }
+        selected_software_genre_keys = {
+            canonical_feature_key(canonical_genre_name(genre))
+            for genre in self._selected_software_genres
+        }
+        selected_tag_keys = {canonical_feature_key(tag) for tag in self._selected_tags}
+
+        if selected_game_genre_keys:
+            if steam_type != "game":
+                return False
+
+            if not selected_game_genre_keys.issubset(genre_keys):
+                return False
+
+        if selected_software_genre_keys:
+            if steam_type != "software":
+                return False
+
+            if not selected_software_genre_keys.issubset(genre_keys):
+                return False
+
+        if selected_tag_keys and not selected_tag_keys.issubset(tag_keys):
+            return False
+
+        return True
+
+    def _open_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Genres / Tags")
+        dialog.resize(520, 560)
+
+        layout = QVBoxLayout(dialog)
+        tabs = QTabWidget(dialog)
+
+        game_genres = _SearchableCheckList(tabs)
+        software_genres = _SearchableCheckList(tabs)
+        tags = _SearchableCheckList(tabs)
+
+        game_genres.set_available(self._available_game_genres)
+        software_genres.set_available(self._available_software_genres)
+        tags.set_available(self._available_tags)
+
+        game_genres.set_selected(self._selected_game_genres)
+        software_genres.set_selected(self._selected_software_genres)
+        tags.set_selected(self._selected_tags)
+
+        tabs.addTab(game_genres, "Game Genres")
+        tabs.addTab(software_genres, "Software Genres")
+        tabs.addTab(tags, "Tags")
+        layout.addWidget(tabs)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Close
+            | QDialogButtonBox.StandardButton.Reset
         )
+        buttons.button(QDialogButtonBox.StandardButton.Reset).setText("Clear Filters")
+        layout.addWidget(buttons)
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+        def sync_selection():
+            self._selected_game_genres = game_genres.selected()
+            self._selected_software_genres = software_genres.selected()
+            self._selected_tags = tags.selected()
+            self._update_button_text()
+            self.filters_changed.emit()
 
-        new_game_selection = set(dialog.selected_game_genres())
+        game_genres.selection_changed.connect(sync_selection)
+        software_genres.selection_changed.connect(sync_selection)
+        tags.selection_changed.connect(sync_selection)
 
-        new_software_selection = set(dialog.selected_software_genres())
+        def clear_all():
+            game_genres.clear_selection()
+            software_genres.clear_selection()
+            tags.clear_selection()
 
-        if (
-            new_game_selection == self._selected_game_genres
-            and new_software_selection == self._selected_software_genres
-        ):
-            return
+        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(clear_all)
+        buttons.rejected.connect(dialog.reject)
 
-        self._selected_game_genres = new_game_selection
-
-        self._selected_software_genres = new_software_selection
-
-        self._update_button_text()
-        self.filters_changed.emit()
-
-    def _choose_tags(self):
-        dialog = SearchableMultiSelectDialog(
-            title="Choose Tags",
-            values=self._available_tags,
-            selected_values=self._selected_tags,
-            parent=self,
-        )
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        new_selection = set(dialog.selected_values())
-
-        if new_selection == self._selected_tags:
-            return
-
-        self._selected_tags = new_selection
-
-        self._update_button_text()
-        self.filters_changed.emit()
+        dialog.exec()
 
     def _update_button_text(self):
-        if self._selected_game_genres:
-            genre_text = self._selection_text(
-                self._selected_game_genres,
-                empty_text="Any Genre",
-            )
+        selected_count = (
+            len(self._selected_game_genres)
+            + len(self._selected_software_genres)
+            + len(self._selected_tags)
+        )
 
-            self.genre_button.setText(f"Game: {genre_text}")
-
-        elif self._selected_software_genres:
-            genre_text = self._selection_text(
-                self._selected_software_genres,
-                empty_text="Any Genre",
-            )
-
-            self.genre_button.setText(f"Software: {genre_text}")
-
+        if selected_count:
+            self.filter_button.setText(f"Genres / Tags ({selected_count})")
         else:
-            self.genre_button.setText("Any Genre")
-
-        self.tag_button.setText(
-            self._selection_text(
-                self._selected_tags,
-                empty_text="Any Tags",
-            )
-        )
-
-        self.clear_button.setEnabled(self.has_active_filters())
-
-    @staticmethod
-    def _selection_text(
-        selected_values,
-        empty_text,
-    ):
-        if not selected_values:
-            return empty_text
-
-        sorted_values = sorted(
-            selected_values,
-            key=str.casefold,
-        )
-
-        if len(sorted_values) == 1:
-            return sorted_values[0]
-
-        return f"{sorted_values[0]} + {len(sorted_values) - 1}"
+            self.filter_button.setText("Genres / Tags")

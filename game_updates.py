@@ -45,6 +45,7 @@ def apply_hltb_candidate(game, candidate):
 
     game.hltb_match_status = "matched"
     game.hltb_checked = True
+    game.hltb_updated_at = int(time.time())
 
 
 def apply_hltb(game, result):
@@ -62,11 +63,13 @@ def apply_hltb(game, result):
     if status == "review":
         game.hltb_match_status = "review"
         game.hltb_checked = True
+        game.hltb_updated_at = int(time.time())
         return
 
     if status == "no_match":
         game.hltb_match_status = "no_match"
         game.hltb_checked = True
+        game.hltb_updated_at = int(time.time())
         return
 
     raise ValueError(f"Unknown HLTB result status: {status}")
@@ -77,6 +80,7 @@ def mark_hltb_no_match(game):
 
     game.hltb_match_status = "no_match"
     game.hltb_checked = True
+    game.hltb_updated_at = int(time.time())
 
 
 def _hltb_state(game):
@@ -91,6 +95,7 @@ def _hltb_state(game):
         game.hltb_web_link,
         game.hltb_match_status,
         game.hltb_checked,
+        game.hltb_updated_at,
     )
 
 
@@ -106,6 +111,7 @@ def _restore_hltb_state(game, state):
         game.hltb_web_link,
         game.hltb_match_status,
         game.hltb_checked,
+        game.hltb_updated_at,
     ) = state
 
 
@@ -155,7 +161,7 @@ def fetch_metadata(game):
 
 
 def apply_metadata(game, result):
-    genres, tags = result
+    genres, tags, positive_reviews, negative_reviews = result
 
     if genres is None:
         genres = []
@@ -170,14 +176,21 @@ def apply_metadata(game, result):
 
     game.genres = genres
     game.tags = tags
+    game.steamspy_positive = positive_reviews
+    game.steamspy_negative = negative_reviews
     game.metadata_checked = True
+    game.metadata_updated_at = int(time.time())
 
 
 def update_metadata(game):
     result = fetch_metadata(game)
     previous_genres = list(game.genres)
     previous_tags = dict(game.tags)
+    previous_positive = game.steamspy_positive
+    previous_negative = game.steamspy_negative
     previous_checked = game.metadata_checked
+
+    previous_updated_at = game.metadata_updated_at
 
     try:
         apply_metadata(game, result)
@@ -186,7 +199,10 @@ def update_metadata(game):
     except Exception:
         game.genres = previous_genres
         game.tags = previous_tags
+        game.steamspy_positive = previous_positive
+        game.steamspy_negative = previous_negative
         game.metadata_checked = previous_checked
+        game.metadata_updated_at = previous_updated_at
         raise
 
 

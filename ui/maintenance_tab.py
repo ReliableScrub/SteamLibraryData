@@ -64,7 +64,16 @@ class MaintenanceTab(QWidget):
         self.steam_classification_progress.setVisible(False)
 
         self.hltb_status = QLabel()
-        self.hltb_button = QPushButton("Update HLTB Data")
+        self.hltb_refresh_count = QComboBox()
+        self.hltb_refresh_count.addItems(["10", "25", "50", "100", "All"])
+        self.hltb_refresh_count.setCurrentText("25")
+        self.hltb_refresh_count.setToolTip(
+            "How many of the oldest checked HLTB entries to refresh."
+        )
+        self.hltb_refresh_button = QPushButton("Refresh Oldest")
+        self.hltb_refresh_button.setToolTip(
+            "Re-query the oldest checked HLTB entries. Pending review entries are skipped."
+        )
 
         self.hltb_progress = QProgressBar()
         self.hltb_progress.setVisible(False)
@@ -74,14 +83,27 @@ class MaintenanceTab(QWidget):
         self.hltb_review_button.setEnabled(False)
 
         self.metadata_status = QLabel()
-        self.metadata_button = QPushButton("Update Genre / Tag Data")
+        self.metadata_refresh_count = QComboBox()
+        self.metadata_refresh_count.addItems(["25", "50", "100", "250", "All"])
+        self.metadata_refresh_count.setCurrentText("100")
+        self.metadata_refresh_count.setToolTip(
+            "How many of the oldest checked SteamSpy metadata entries to refresh."
+        )
+        self.metadata_refresh_button = QPushButton("Refresh Oldest")
+        self.metadata_refresh_button.setToolTip(
+            "Refresh the oldest Genre / Tag / Public Reception entries first."
+        )
 
         self.metadata_progress = QProgressBar()
         self.metadata_progress.setVisible(False)
         self.metadata_progress.setFormat("%v / %m")
 
         self.achievement_status = QLabel()
-        self.achievement_button = QPushButton("Update Achievement Data")
+        self.achievement_refresh_button = QPushButton("Refresh Changed")
+        self.achievement_refresh_button.setToolTip(
+            "Refresh achievements only for games whose Steam playtime increased "
+            "since their last achievement check."
+        )
 
         self.achievement_progress = QProgressBar()
         self.achievement_progress.setVisible(False)
@@ -236,8 +258,9 @@ class MaintenanceTab(QWidget):
 
         hltb_buttons = QHBoxLayout()
 
-        hltb_buttons.addWidget(self.hltb_button)
-
+        hltb_buttons.addWidget(QLabel("Refresh oldest:"))
+        hltb_buttons.addWidget(self.hltb_refresh_count)
+        hltb_buttons.addWidget(self.hltb_refresh_button)
         hltb_buttons.addWidget(self.hltb_review_button)
 
         updates_grid.addLayout(
@@ -258,8 +281,13 @@ class MaintenanceTab(QWidget):
             1,
         )
 
-        updates_grid.addWidget(
-            self.metadata_button,
+        metadata_buttons = QHBoxLayout()
+        metadata_buttons.addWidget(QLabel("Refresh oldest:"))
+        metadata_buttons.addWidget(self.metadata_refresh_count)
+        metadata_buttons.addWidget(self.metadata_refresh_button)
+
+        updates_grid.addLayout(
+            metadata_buttons,
             4,
             2,
         )
@@ -276,8 +304,11 @@ class MaintenanceTab(QWidget):
             1,
         )
 
-        updates_grid.addWidget(
-            self.achievement_button,
+        achievement_buttons = QHBoxLayout()
+        achievement_buttons.addWidget(self.achievement_refresh_button)
+
+        updates_grid.addLayout(
+            achievement_buttons,
             5,
             2,
         )
@@ -358,6 +389,21 @@ class MaintenanceTab(QWidget):
 
         scroll.setWidget(content)
         outer_layout.addWidget(scroll)
+
+    @staticmethod
+    def _refresh_limit(combo):
+        value = combo.currentText().strip()
+
+        if value == "All":
+            return None
+
+        return int(value)
+
+    def metadata_refresh_limit(self):
+        return self._refresh_limit(self.metadata_refresh_count)
+
+    def hltb_refresh_limit(self):
+        return self._refresh_limit(self.hltb_refresh_count)
 
     def set_steam_id(
         self,
@@ -471,11 +517,13 @@ class MaintenanceTab(QWidget):
 
         self.steam_classification_button.setEnabled(enabled)
 
-        self.hltb_button.setEnabled(enabled)
+        self.hltb_refresh_button.setEnabled(enabled)
+        self.hltb_refresh_count.setEnabled(enabled)
 
-        self.metadata_button.setEnabled(enabled)
+        self.metadata_refresh_button.setEnabled(enabled)
+        self.metadata_refresh_count.setEnabled(enabled)
 
-        self.achievement_button.setEnabled(enabled)
+        self.achievement_refresh_button.setEnabled(enabled)
 
         self.hltb_review_button.setEnabled(enabled and self._review_available)
 

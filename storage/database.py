@@ -41,6 +41,9 @@ def initialize_database():
                 classification_updated_at INTEGER,
 
                 metadata_checked INTEGER NOT NULL DEFAULT 0,
+                metadata_updated_at INTEGER,
+                steamspy_positive INTEGER,
+                steamspy_negative INTEGER,
 
                 hltb_main REAL,
                 hltb_main_extra REAL,
@@ -52,6 +55,7 @@ def initialize_database():
                 hltb_web_link TEXT,
                 hltb_match_status TEXT,
                 hltb_checked INTEGER NOT NULL DEFAULT 0,
+                hltb_updated_at INTEGER,
 
                 achievement_total INTEGER,
                 achievements_unlocked INTEGER,
@@ -147,6 +151,8 @@ def save_game(game):
                 steam_type,
                 classification_updated_at,
                 metadata_checked,
+                steamspy_positive,
+                steamspy_negative,
                 hltb_main,
                 hltb_main_extra,
                 hltb_completionist,
@@ -162,9 +168,11 @@ def save_game(game):
                 achievements_checked,
                 achievements_updated_at,
                 achievements_playtime_minutes,
-                manual_status
+                manual_status,
+                metadata_updated_at,
+                hltb_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(app_id) DO UPDATE SET
                 name = excluded.name,
                 playtime_minutes = excluded.playtime_minutes,
@@ -173,6 +181,8 @@ def save_game(game):
                 steam_type = excluded.steam_type,
                 classification_updated_at = excluded.classification_updated_at,
                 metadata_checked = excluded.metadata_checked,
+                steamspy_positive = excluded.steamspy_positive,
+                steamspy_negative = excluded.steamspy_negative,
                 hltb_main = excluded.hltb_main,
                 hltb_main_extra = excluded.hltb_main_extra,
                 hltb_completionist = excluded.hltb_completionist,
@@ -188,7 +198,9 @@ def save_game(game):
                 achievements_checked = excluded.achievements_checked,
                 achievements_updated_at = excluded.achievements_updated_at,
                 achievements_playtime_minutes = excluded.achievements_playtime_minutes,
-                manual_status = excluded.manual_status
+                manual_status = excluded.manual_status,
+                metadata_updated_at = excluded.metadata_updated_at,
+                hltb_updated_at = excluded.hltb_updated_at
         """,
             (
                 game.app_id,
@@ -199,6 +211,8 @@ def save_game(game):
                 game.steam_type,
                 game.classification_updated_at,
                 int(game.metadata_checked),
+                game.steamspy_positive,
+                game.steamspy_negative,
                 game.hltb_main,
                 game.hltb_main_extra,
                 game.hltb_completionist,
@@ -215,6 +229,8 @@ def save_game(game):
                 game.achievements_updated_at,
                 game.achievements_playtime_minutes,
                 game.manual_status,
+                game.metadata_updated_at,
+                game.hltb_updated_at,
             ),
         )
 
@@ -296,7 +312,8 @@ def save_hltb_data(game, candidates=None):
                 hltb_game_id = ?,
                 hltb_web_link = ?,
                 hltb_match_status = ?,
-                hltb_checked = ?
+                hltb_checked = ?,
+                hltb_updated_at = ?
             WHERE app_id = ?
             """,
             (
@@ -310,6 +327,7 @@ def save_hltb_data(game, candidates=None):
                 game.hltb_web_link,
                 game.hltb_match_status,
                 int(game.hltb_checked),
+                game.hltb_updated_at,
                 game.app_id,
             ),
         )
@@ -366,11 +384,18 @@ def save_metadata_data(game):
         cursor = connection.execute(
             """
             UPDATE games
-            SET metadata_checked = ?
+            SET
+                metadata_checked = ?,
+                metadata_updated_at = ?,
+                steamspy_positive = ?,
+                steamspy_negative = ?
             WHERE app_id = ?
             """,
             (
                 int(game.metadata_checked),
+                game.metadata_updated_at,
+                game.steamspy_positive,
+                game.steamspy_negative,
                 game.app_id,
             ),
         )
@@ -534,6 +559,8 @@ def load_games():
                 steam_type,
                 classification_updated_at,
                 metadata_checked,
+                steamspy_positive,
+                steamspy_negative,
                 hltb_main,
                 hltb_main_extra,
                 hltb_completionist,
@@ -549,7 +576,9 @@ def load_games():
                 achievements_checked,
                 achievements_updated_at,
                 achievements_playtime_minutes,
-                manual_status
+                manual_status,
+                metadata_updated_at,
+                hltb_updated_at
             FROM games
         """).fetchall()
 
@@ -590,24 +619,28 @@ def load_games():
                 steam_type=row[5],
                 classification_updated_at=row[6],
                 metadata_checked=bool(row[7]),
-                hltb_main=row[8],
-                hltb_main_extra=row[9],
-                hltb_completionist=row[10],
-                hltb_all_styles=row[11],
-                hltb_match_name=row[12],
-                hltb_similarity=row[13],
-                hltb_game_id=row[14],
-                hltb_web_link=row[15],
-                hltb_match_status=row[16],
-                hltb_checked=bool(row[17]),
-                achievement_total=row[18],
-                achievements_unlocked=row[19],
-                achievements_checked=bool(row[20]),
-                achievements_updated_at=row[21],
-                achievements_playtime_minutes=row[22],
+                steamspy_positive=row[8],
+                steamspy_negative=row[9],
+                hltb_main=row[10],
+                hltb_main_extra=row[11],
+                hltb_completionist=row[12],
+                hltb_all_styles=row[13],
+                hltb_match_name=row[14],
+                hltb_similarity=row[15],
+                hltb_game_id=row[16],
+                hltb_web_link=row[17],
+                hltb_match_status=row[18],
+                hltb_checked=bool(row[19]),
+                achievement_total=row[20],
+                achievements_unlocked=row[21],
+                achievements_checked=bool(row[22]),
+                achievements_updated_at=row[23],
+                achievements_playtime_minutes=row[24],
                 genres=genres,
                 tags=tags,
-                manual_status=row[23],
+                manual_status=row[25],
+                metadata_updated_at=row[-2],
+                hltb_updated_at=row[-1],
             )
 
             games.append(game)
@@ -742,6 +775,12 @@ def ensure_game_columns(conn):
     if "classification_updated_at" not in columns:
         conn.execute("ALTER TABLE games ADD COLUMN classification_updated_at INTEGER")
 
+    if "steamspy_positive" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN steamspy_positive INTEGER")
+
+    if "steamspy_negative" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN steamspy_negative INTEGER")
+
     if "achievements_updated_at" not in columns:
         conn.execute("ALTER TABLE games ADD COLUMN achievements_updated_at INTEGER")
 
@@ -749,6 +788,12 @@ def ensure_game_columns(conn):
         conn.execute(
             "ALTER TABLE games ADD COLUMN achievements_playtime_minutes INTEGER"
         )
+
+    if "metadata_updated_at" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN metadata_updated_at INTEGER")
+
+    if "hltb_updated_at" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN hltb_updated_at INTEGER")
 
 
 def reset_empty_hltb_checks():

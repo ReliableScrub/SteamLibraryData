@@ -3,21 +3,19 @@ from dataclasses import dataclass
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction import DictVectorizer
 
-from recommendations.baseline import BaselineScore
 from recommendations.features import (
     cosine_similarity,
     normalize_vector,
 )
 from recommendations.feedback import final_feedback
 
-
 DEFAULT_CLUSTER_COUNT = 5
 RANDOM_STATE = 42
 MIN_CLUSTERING_HISTORY = 15
 MIN_POSITIVE_TRAINING_WEIGHT = 0.05
 
-CLUSTER_WEIGHT = 0.50
-NEIGHBOR_WEIGHT = 0.50
+CLUSTER_WEIGHT = 0.40
+BASELINE_WEIGHT = 0.60
 
 
 @dataclass(frozen=True)
@@ -73,10 +71,7 @@ def positive_feedback_weight(game):
     if feedback.score <= 0:
         return 0.0
 
-    return (
-        feedback.score
-        * feedback.confidence
-    )
+    return feedback.score * feedback.confidence
 
 
 def train_taste_clusters(
@@ -91,39 +86,24 @@ def train_taste_clusters(
         if game.playtime_minutes <= 0:
             continue
 
-        vector = content_vectors.get(
-            game.app_id
-        )
+        vector = content_vectors.get(game.app_id)
 
         if not vector:
             continue
 
-        weight = positive_feedback_weight(
-            game
-        )
+        weight = positive_feedback_weight(game)
 
-        if (
-            weight
-            < MIN_POSITIVE_TRAINING_WEIGHT
-        ):
+        if weight < MIN_POSITIVE_TRAINING_WEIGHT:
             continue
 
-        training_vectors.append(
-            vector
-        )
+        training_vectors.append(vector)
 
-        training_weights.append(
-            weight
-        )
+        training_weights.append(weight)
 
-    positive_count = len(
-        training_vectors
-    )
+    positive_count = len(training_vectors)
 
     if cluster_count is None:
-        cluster_count = choose_cluster_count(
-            positive_count
-        )
+        cluster_count = choose_cluster_count(positive_count)
 
     if cluster_count is None:
         return None
@@ -131,13 +111,9 @@ def train_taste_clusters(
     if positive_count < cluster_count:
         return None
 
-    vectorizer = DictVectorizer(
-        sparse=False
-    )
+    vectorizer = DictVectorizer(sparse=False)
 
-    matrix = vectorizer.fit_transform(
-        training_vectors
-    )
+    matrix = vectorizer.fit_transform(training_vectors)
 
     model = KMeans(
         n_clusters=cluster_count,
@@ -150,40 +126,26 @@ def train_taste_clusters(
         sample_weight=training_weights,
     )
 
-    feature_names = (
-        vectorizer.get_feature_names_out()
-    )
+    feature_names = vectorizer.get_feature_names_out()
 
     cluster_centers = []
 
     for center in model.cluster_centers_:
         center_vector = {
             feature: float(value)
-            for feature, value
-            in zip(
+            for feature, value in zip(
                 feature_names,
                 center,
             )
             if value != 0
         }
 
-        cluster_centers.append(
-            normalize_vector(
-                center_vector
-            )
-        )
+        cluster_centers.append(normalize_vector(center_vector))
 
-    cluster_sizes = [
-        0
-        for _ in range(
-            cluster_count
-        )
-    ]
+    cluster_sizes = [0 for _ in range(cluster_count)]
 
     for label in model.labels_:
-        cluster_sizes[
-            int(label)
-        ] += 1
+        cluster_sizes[int(label)] += 1
 
     return TasteClusterModel(
         vectorizer=vectorizer,
@@ -199,9 +161,7 @@ def best_cluster_match(
     best_index = 0
     best_similarity = 0.0
 
-    for index, center in enumerate(
-        cluster_model.cluster_centers
-    ):
+    for index, center in enumerate(cluster_model.cluster_centers):
         similarity = cosine_similarity(
             candidate_vector,
             center,
@@ -226,13 +186,13 @@ def score_unplayed_games(
     """
     Score unplayed games using:
 
-        50% closest learned taste-cluster similarity
-        50% K=3 feedback-weighted neighborhood similarity
+        40% closest learned positive taste-cluster similarity
+        60% signed baseline score
+
+    The baseline retains explicit dislike information through the signed
+    preference profile and negative-neighbor penalty.
     """
-    baseline_by_id = {
-        score.app_id: score
-        for score in baseline_scores
-    }
+    baseline_by_id = {score.app_id: score for score in baseline_scores}
 
     scores = []
 
@@ -240,16 +200,12 @@ def score_unplayed_games(
         if game.playtime_minutes > 0:
             continue
 
-        candidate_vector = content_vectors.get(
-            game.app_id
-        )
+        candidate_vector = content_vectors.get(game.app_id)
 
         if not candidate_vector:
             continue
 
-        baseline_score = baseline_by_id.get(
-            game.app_id
-        )
+        baseline_score = baseline_by_id.get(game.app_id)
 
         if baseline_score is None:
             continue
@@ -262,15 +218,11 @@ def score_unplayed_games(
             cluster_model,
         )
 
-        neighborhood_similarity = (
-            baseline_score.neighborhood_similarity
-        )
+        neighborhood_similarity = baseline_score.neighborhood_similarity
 
         recommendation_score = (
-            CLUSTER_WEIGHT
-            * cluster_similarity
-            + NEIGHBOR_WEIGHT
-            * neighborhood_similarity
+            CLUSTER_WEIGHT * cluster_similarity
+            + BASELINE_WEIGHT * baseline_score.recommendation_score
         )
 
         scores.append(

@@ -267,16 +267,21 @@ class MainWindow(QMainWindow):
             self.start_steam_classification
         )
 
-        self.maintenance_tab.hltb_button.clicked.connect(self.start_hltb_update)
+
+        self.maintenance_tab.hltb_refresh_button.clicked.connect(
+            self.start_oldest_hltb_refresh
+        )
 
         self.maintenance_tab.hltb_review_button.clicked.connect(
             self.library_tab.review_hltb_matches
         )
 
-        self.maintenance_tab.metadata_button.clicked.connect(self.start_metadata_update)
+        self.maintenance_tab.metadata_refresh_button.clicked.connect(
+            self.start_oldest_metadata_refresh
+        )
 
-        self.maintenance_tab.achievement_button.clicked.connect(
-            self.start_achievement_update
+        self.maintenance_tab.achievement_refresh_button.clicked.connect(
+            self.start_changed_achievement_refresh
         )
 
         self.maintenance_tab.update_all_button.clicked.connect(
@@ -337,9 +342,7 @@ class MainWindow(QMainWindow):
         )
 
     def _recommendation_busy_changed(self, busy):
-        self.maintenance_tab.set_busy(
-            busy or self.update_controller.is_running()
-        )
+        self.maintenance_tab.set_busy(busy or self.update_controller.is_running())
 
     def _games_changed(self, games):
         self.games = games
@@ -396,8 +399,7 @@ class MainWindow(QMainWindow):
             lines.append(source_names.get(source, source.title()))
             lines.append("-" * len(lines[-1]))
 
-            for message in messages:
-                lines.append(message)
+            lines.extend(messages)
 
             lines.append("")
 
@@ -405,8 +407,7 @@ class MainWindow(QMainWindow):
             lines.append(source_names.get(source, source.title()))
             lines.append("-" * len(lines[-1]))
 
-            for message in messages:
-                lines.append(message)
+            lines.extend(messages)
 
             lines.append("")
 
@@ -492,7 +493,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Missing Data",
-                "All games have already been checked.",
+                "No missing Steam classification or source data remains.",
             )
             return
 
@@ -502,6 +503,77 @@ class MainWindow(QMainWindow):
             steam_id = self.steam_id
 
         self.update_controller.start_all_missing(steam_id)
+
+    def start_oldest_metadata_refresh(self):
+        available = self.update_controller.metadata_refresh_count()
+
+        if available == 0:
+            QMessageBox.information(
+                self,
+                "Metadata Refresh",
+                "There are no checked metadata entries to refresh yet.",
+            )
+            return
+
+        limit = self.maintenance_tab.metadata_refresh_limit()
+        selected = available if limit is None else min(limit, available)
+
+        if limit is None and selected >= 500:
+            result = QMessageBox.question(
+                self,
+                "Refresh All Metadata",
+                f"Refresh all {selected:,} checked metadata entries?\n\n"
+                "This can take a long time and may encounter SteamSpy rate limits.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
+        self.update_controller.start_oldest_metadata_refresh(limit)
+
+    def start_oldest_hltb_refresh(self):
+        available = self.update_controller.hltb_refresh_count()
+
+        if available == 0:
+            QMessageBox.information(
+                self,
+                "HLTB Refresh",
+                "There are no checked HLTB entries available for rolling refresh.",
+            )
+            return
+
+        limit = self.maintenance_tab.hltb_refresh_limit()
+        selected = available if limit is None else min(limit, available)
+
+        if selected >= 100:
+            result = QMessageBox.question(
+                self,
+                "Refresh HLTB",
+                f"Refresh the {selected:,} oldest checked HLTB entries?\n\n"
+                "HLTB is comparatively slow and may rate limit large refreshes.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
+        self.update_controller.start_oldest_hltb_refresh(limit)
+
+    def start_changed_achievement_refresh(self):
+        count = self.update_controller.changed_achievement_count()
+
+        if count == 0:
+            QMessageBox.information(
+                self,
+                "Achievement Refresh",
+                "No checked games have gained Steam playtime since their last achievement check.",
+            )
+            return
+
+        self.update_controller.start_changed_achievement_refresh(self.steam_id)
 
     def cancel_updates(self):
         self.maintenance_tab.cancel_updates_button.setEnabled(False)

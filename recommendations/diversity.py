@@ -1,6 +1,6 @@
 from recommendations.features import cosine_similarity
 
-DEFAULT_MMR_RELEVANCE_WEIGHT = 0.90
+DEFAULT_MMR_RELEVANCE_WEIGHT = 0.75
 
 
 def rerank_mmr(

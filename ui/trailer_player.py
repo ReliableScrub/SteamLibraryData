@@ -1,5 +1,5 @@
 import requests
-from PySide6.QtCore import QObject, QRunnable, QSize, QThreadPool, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QUrl, Signal
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
 )
 
 from api.store_api import get_trailer_url
-
 
 DEFAULT_TRAILER_VOLUME = 15
 MIN_PREVIEW_HEIGHT = 180
@@ -387,13 +386,17 @@ class TrailerPlayer(QWidget):
             return
 
         if self.app_id in _NO_TRAILER_CACHE:
-            self.preview_frame.label.setText("No Steam trailer is available for this game.")
+            self.preview_frame.label.setText(
+                "No Steam trailer is available for this game."
+            )
             self.preview_frame.setCursor(Qt.CursorShape.ArrowCursor)
             self.trailer_button.setText("No Trailer")
             self.trailer_button.setEnabled(False)
             return
 
-        self.preview_frame.label.setText("▶  Trailer Preview\nClick here or Watch Trailer to play.")
+        self.preview_frame.label.setText(
+            "▶  Trailer Preview\nClick here or Watch Trailer to play."
+        )
         self.preview_frame.setCursor(Qt.CursorShape.PointingHandCursor)
         self.trailer_button.setText("Watch Trailer")
         self.trailer_button.setEnabled(True)

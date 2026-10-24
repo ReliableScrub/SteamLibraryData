@@ -16,6 +16,8 @@ class RecommendationGameData:
     rating: int | None
 
     metadata_checked: bool
+    steamspy_positive: int | None = None
+    steamspy_negative: int | None = None
     genres: list[str] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
 
@@ -44,6 +46,8 @@ def load_recommendation_games():
                 g.manual_status,
                 r.rating,
                 g.metadata_checked,
+                g.steamspy_positive,
+                g.steamspy_negative,
                 g.hltb_main,
                 g.hltb_main_extra,
                 g.hltb_completionist,
@@ -73,15 +77,17 @@ def load_recommendation_games():
                 manual_status=row[5],
                 rating=row[6],
                 metadata_checked=bool(row[7]),
-                hltb_main=row[8],
-                hltb_main_extra=row[9],
-                hltb_completionist=row[10],
-                hltb_all_styles=row[11],
-                hltb_checked=bool(row[12]),
-                hltb_match_status=row[13],
-                achievement_total=row[14],
-                achievements_unlocked=row[15],
-                achievements_checked=bool(row[16]),
+                steamspy_positive=row[8],
+                steamspy_negative=row[9],
+                hltb_main=row[10],
+                hltb_main_extra=row[11],
+                hltb_completionist=row[12],
+                hltb_all_styles=row[13],
+                hltb_checked=bool(row[14]),
+                hltb_match_status=row[15],
+                achievement_total=row[16],
+                achievements_unlocked=row[17],
+                achievements_checked=bool(row[18]),
             )
 
             games[game.app_id] = game

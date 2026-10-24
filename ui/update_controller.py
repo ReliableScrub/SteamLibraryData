@@ -1,3 +1,4 @@
+import time
 from functools import partial
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -20,6 +21,8 @@ from workers import (
 )
 
 BATCH_SIZE = 5
+METADATA_UI_REFRESH_INTERVAL = 10
+SECONDS_PER_DAY = 24 * 60 * 60
 
 
 class SteamClassificationController(QObject):
@@ -257,6 +260,9 @@ class UpdateController(QObject):
         self._combined_workers = {}
         self._combined_progress = {}
         self._combined_total = 0
+        self._classification_followup = None
+        self._classification_followup_steam_id = None
+        self._classification_followup_succeeded = False
         self._cancel_requested = False
         self._failures = []
         self._batch_completed = 0
@@ -317,41 +323,268 @@ class UpdateController(QObject):
 
     def has_missing_data(self):
         return any(
-            not game.hltb_checked
+            game.classification_updated_at is None
             or not game.metadata_checked
-            or (not game.achievements_checked)
+            or (
+                game.is_backlog_eligible()
+                and (
+                    not game.hltb_checked
+                    or not game.achievements_checked
+                )
+            )
             for game in self.games
         )
 
     def missing_data_needs_steam_id(self):
-        return any(not game.achievements_checked for game in self.games)
+        return any(
+            not game.achievements_checked
+            and game.is_backlog_eligible()
+            for game in self.games
+        )
+
+    @staticmethod
+    @staticmethod
+    def _oldest_first(games, timestamp_attr, limit=None):
+        ordered = sorted(
+            games,
+            key=lambda game: (
+                getattr(game, timestamp_attr, None) is not None,
+                getattr(game, timestamp_attr, None) or 0,
+                game.app_id,
+            ),
+        )
+
+        if limit is None:
+            return ordered
+
+        return ordered[:max(int(limit), 0)]
+
+    @staticmethod
+    def _oldest_age_text(games, timestamp_attr):
+        if not games:
+            return "n/a"
+
+        timestamps = [getattr(game, timestamp_attr, None) for game in games]
+
+        if any(timestamp is None for timestamp in timestamps):
+            return "pre-timestamp"
+
+        oldest = min(timestamps)
+        age_days = max(0, int(time.time() - oldest) // SECONDS_PER_DAY)
+
+        if age_days == 0:
+            return "today"
+
+        if age_days == 1:
+            return "1 day"
+
+        return f"{age_days} days"
+
+    def metadata_refreshable_games(self):
+        return [game for game in self.games if game.metadata_checked]
+
+    def hltb_refreshable_games(self):
+        return [
+            game
+            for game in self.games
+            if game.hltb_checked
+            and game.is_backlog_eligible()
+            and game.hltb_match_status != "review"
+        ]
+
+    def changed_achievement_games(self):
+        games = []
+
+        for game in self.games:
+            if not game.achievements_checked:
+                continue
+
+            if not game.is_backlog_eligible():
+                continue
+
+            checked_playtime = game.achievements_playtime_minutes
+
+            if checked_playtime is None or game.playtime_minutes > checked_playtime:
+                games.append(game)
+
+        return sorted(
+            games,
+            key=lambda game: (
+                game.playtime_minutes - (game.achievements_playtime_minutes or 0),
+                game.last_played_timestamp or 0,
+            ),
+            reverse=True,
+        )
+
+    def metadata_refresh_count(self):
+        return len(self.metadata_refreshable_games())
+
+    def hltb_refresh_count(self):
+        return len(self.hltb_refreshable_games())
+
+    def changed_achievement_count(self):
+        return len(self.changed_achievement_games())
+
+    def oldest_metadata_games(self, limit=100):
+        return self._oldest_first(
+            self.metadata_refreshable_games(),
+            "metadata_updated_at",
+            limit,
+        )
+
+    def oldest_hltb_games(self, limit=25):
+        return self._oldest_first(
+            self.hltb_refreshable_games(),
+            "hltb_updated_at",
+            limit,
+        )
+
+    def start_oldest_metadata_refresh(self, limit=100):
+        if self.is_running():
+            return "busy"
+
+        games = self.oldest_metadata_games(limit)
+
+        if not games:
+            return "nothing"
+
+        return self._start_batch(
+            games=games,
+            updater=update_metadata,
+            source="metadata",
+            task_name="Metadata refresh",
+            action_text="Refreshing metadata for",
+        )
+
+    def start_oldest_hltb_refresh(self, limit=25):
+        if self.is_running():
+            return "busy"
+
+        games = self.oldest_hltb_games(limit)
+
+        if not games:
+            return "nothing"
+
+        return self._start_batch(
+            games=games,
+            updater=update_hltb,
+            source="hltb",
+            task_name="HLTB refresh",
+            action_text="Refreshing HLTB for",
+        )
+
+    def start_changed_achievement_refresh(self, steam_id):
+        if self.is_running():
+            return "busy"
+
+        games = self.changed_achievement_games()
+
+        if not games:
+            return "nothing"
+
+        if steam_id is None:
+            return "steam_id_required"
+
+        steam_api_key = self.steam_api_key
+
+        def achievement_updater(game):
+            update_achievements(
+                game,
+                steam_id,
+                steam_api_key,
+            )
+
+        return self._start_batch(
+            games=games,
+            updater=achievement_updater,
+            source="achievements",
+            task_name="Changed achievements",
+            action_text="Refreshing changed achievements for",
+        )
+
+    def _start_classification_followup(self, mode, steam_id):
+        self._classification_followup = mode
+        self._classification_followup_steam_id = steam_id
+        self._classification_followup_succeeded = False
+
+        self.status_changed.emit(
+            "all",
+            "Missing Data: Refreshing Steam classification...",
+        )
+        self.progress_changed.emit("all", 0, 0, True)
+        self.status_changed.emit(
+            "classification",
+            "Steam Classification: Starting...",
+        )
+        self.progress_changed.emit("classification", 0, 0, True)
+
+        if not self._classification.start(self.games):
+            self._classification_followup = None
+            self._classification_followup_steam_id = None
+            self.progress_changed.emit("classification", 0, 0, False)
+            self.progress_changed.emit("all", 0, 0, False)
+            return "failed_to_start"
+
+        self.busy_changed.emit(True)
+        return "started"
 
     def refresh_statuses(self):
         self.status_changed.emit("library", f"Steam Library: {len(self.games)} games")
 
-        matched = sum(1 for game in self.games if game.hltb_match_status == "matched")
-        review = sum(1 for game in self.games if game.hltb_match_status == "review")
-        no_match = sum(1 for game in self.games if game.hltb_match_status == "no_match")
+        eligible_games = [game for game in self.games if game.is_backlog_eligible()]
 
-        hltb_pending = sum(1 for game in self.games if not game.hltb_checked)
+        matched = sum(
+            1
+            for game in eligible_games
+            if game.hltb_match_status == "matched"
+        )
+        review = sum(
+            1
+            for game in eligible_games
+            if game.hltb_match_status == "review"
+        )
+        no_match = sum(
+            1
+            for game in eligible_games
+            if game.hltb_match_status == "no_match"
+        )
+        hltb_pending = sum(1 for game in eligible_games if not game.hltb_checked)
+        hltb_oldest = self._oldest_age_text(
+            self.hltb_refreshable_games(),
+            "hltb_updated_at",
+        )
 
         self.status_changed.emit(
             "hltb",
-            f"HLTB: {matched} matched | {review} review | {no_match} no match | {hltb_pending} pending",
+            f"HLTB: {matched} matched | {review} review | {no_match} no match | "
+            f"{hltb_pending} pending | oldest: {hltb_oldest}",
         )
 
         metadata_checked = sum(1 for game in self.games if game.metadata_checked)
-
-        self.status_changed.emit(
-            "metadata", f"Genre / Tag Data: {metadata_checked} / {len(self.games)}"
+        metadata_oldest = self._oldest_age_text(
+            self.metadata_refreshable_games(),
+            "metadata_updated_at",
         )
 
-        achievement_checked = sum(1 for game in self.games if game.achievements_checked)
+        self.status_changed.emit(
+            "metadata",
+            f"Genre / Tag Data: {metadata_checked} / {len(self.games)} checked | "
+            f"oldest: {metadata_oldest}",
+        )
+
+        achievement_checked = sum(
+            1
+            for game in eligible_games
+            if game.achievements_checked
+        )
+        changed_achievements = self.changed_achievement_count()
 
         self.status_changed.emit(
             "achievements",
-            f"Achievements: {achievement_checked} / {len(self.games)} checked",
+            f"Achievements: {achievement_checked} / {len(eligible_games)} checked | "
+            f"{changed_achievements} changed since last check",
         )
+
         self.status_changed.emit("classification", self._classification_status_text())
         self.review_available_changed.emit(review > 0)
 
@@ -492,6 +725,9 @@ class UpdateController(QObject):
         return "started"
 
     def _classification_succeeded(self):
+        if self._classification_followup is not None:
+            self._classification_followup_succeeded = True
+
         self.data_changed.emit()
         self.refresh_statuses()
 
@@ -510,13 +746,46 @@ class UpdateController(QObject):
     def _classification_finished(self, was_cancelled):
         self.progress_changed.emit("classification", 0, 0, False)
 
+        followup = self._classification_followup
+        steam_id = self._classification_followup_steam_id
+        succeeded = self._classification_followup_succeeded
+
+        self._classification_followup = None
+        self._classification_followup_steam_id = None
+        self._classification_followup_succeeded = False
+
+        if followup is not None:
+            if was_cancelled:
+                self.progress_changed.emit("all", 0, 0, False)
+                self.status_changed.emit("all", "Missing Data: Cancelled")
+                self._cancel_requested = False
+                self.busy_changed.emit(self.is_running())
+                return
+
+            if not succeeded:
+                self.progress_changed.emit("all", 0, 0, False)
+                self.status_changed.emit(
+                    "all",
+                    "Missing Data: Steam classification failed",
+                )
+                self._cancel_requested = False
+                self.busy_changed.emit(self.is_running())
+                return
+
+            self._cancel_requested = False
+            self._start_missing_sources(
+                steam_id,
+                reset_failures=False,
+            )
+            return
+
         if was_cancelled:
             self.status_changed.emit(
-                "classification", "Steam Classification: Cancelled"
+                "classification",
+                "Steam Classification: Cancelled",
             )
 
         self._cancel_requested = False
-
         self.busy_changed.emit(self.is_running())
 
     def start_hltb_batch(self):
@@ -666,12 +935,16 @@ class UpdateController(QObject):
 
     def _batch_progress(self, completed, total):
         self._batch_completed = completed
+
         self.progress_changed.emit(
             self._batch_source,
             completed,
             total,
             True,
         )
+
+        if self._batch_source == "metadata":
+            self.data_changed.emit()
 
     def _batch_finished(self):
         source = self._batch_source
@@ -712,36 +985,83 @@ class UpdateController(QObject):
         if self.is_running():
             return "busy"
 
-        hltb_games = [game for game in self.games if not game.hltb_checked]
-        metadata_games = [game for game in self.games if not game.metadata_checked]
+        if not self.has_missing_data():
+            return "nothing"
+
+        if self.missing_data_needs_steam_id() and steam_id is None:
+            return "steam_id_required"
+
+        self._reset_failures()
+        self._cancel_requested = False
+
+        needs_classification = any(
+            game.classification_updated_at is None
+            for game in self.games
+        )
+
+        if needs_classification:
+            return self._start_classification_followup(
+                "missing",
+                steam_id,
+            )
+
+        return self._start_missing_sources(
+            steam_id,
+            reset_failures=False,
+        )
+
+    def _start_missing_sources(self, steam_id, reset_failures=True):
+        if reset_failures:
+            self._reset_failures()
+
+        hltb_games = [
+            game
+            for game in self.games
+            if not game.hltb_checked
+            and game.is_backlog_eligible()
+        ]
+        metadata_games = [
+            game
+            for game in self.games
+            if not game.metadata_checked
+        ]
         achievement_games = [
-            game for game in self.games if not game.achievements_checked
+            game
+            for game in self.games
+            if not game.achievements_checked
+            and game.is_backlog_eligible()
         ]
 
-        if not hltb_games and (not metadata_games) and (not achievement_games):
+        if not hltb_games and not metadata_games and not achievement_games:
+            self.progress_changed.emit("all", 0, 0, False)
+            self.status_changed.emit("all", "Missing Data: Complete")
+            self.busy_changed.emit(False)
             return "nothing"
 
         if achievement_games and steam_id is None:
             return "steam_id_required"
 
-        self._reset_failures()
-        self._cancel_requested = False
         self._combined_total = (
-            len(hltb_games) + len(metadata_games) + len(achievement_games)
+            len(hltb_games)
+            + len(metadata_games)
+            + len(achievement_games)
         )
         self._combined_progress = {}
 
         if hltb_games:
             self._combined_progress["hltb"] = 0
-
         if metadata_games:
             self._combined_progress["metadata"] = 0
-
         if achievement_games:
             self._combined_progress["achievements"] = 0
 
         self.status_changed.emit("all", "Missing Data: Updating...")
-        self.progress_changed.emit("all", 0, self._combined_total, True)
+        self.progress_changed.emit(
+            "all",
+            0,
+            self._combined_total,
+            True,
+        )
 
         if hltb_games:
             self._start_combined_source(
@@ -763,7 +1083,11 @@ class UpdateController(QObject):
             steam_api_key = self.steam_api_key
 
             def achievement_updater(game):
-                update_achievements(game, steam_id, steam_api_key)
+                update_achievements(
+                    game,
+                    steam_id,
+                    steam_api_key,
+                )
 
             self._start_combined_source(
                 source="achievements",
@@ -773,7 +1097,6 @@ class UpdateController(QObject):
             )
 
         self.busy_changed.emit(True)
-
         return "started"
 
     def _start_combined_source(
@@ -830,11 +1153,28 @@ class UpdateController(QObject):
     def _combined_source_progress(self, source, completed, total):
         self._combined_progress[source] = completed
 
-        self.progress_changed.emit(source, completed, total, True)
+        self.progress_changed.emit(
+            source,
+            completed,
+            total,
+            True,
+        )
 
         overall_completed = sum(self._combined_progress.values())
 
-        self.progress_changed.emit("all", overall_completed, self._combined_total, True)
+        self.progress_changed.emit(
+            "all",
+            overall_completed,
+            self._combined_total,
+            True,
+        )
+
+        if source == "metadata" and (
+            completed == 1
+            or completed % METADATA_UI_REFRESH_INTERVAL == 0
+            or completed == total
+        ):
+            self.data_changed.emit()
 
     def _combined_thread_finished(self, source, thread):
         current_thread = self._combined_threads.get(source)
@@ -860,9 +1200,28 @@ class UpdateController(QObject):
         self.data_changed.emit()
         self.refresh_statuses()
 
-        remaining = sum(1 for game in self.games if not game.hltb_checked)
-        remaining += sum(1 for game in self.games if not game.metadata_checked)
-        remaining += sum(1 for game in self.games if not game.achievements_checked)
+        remaining = sum(
+            1
+            for game in self.games
+            if game.classification_updated_at is None
+        )
+        remaining += sum(
+            1
+            for game in self.games
+            if not game.hltb_checked
+            and game.is_backlog_eligible()
+        )
+        remaining += sum(
+            1
+            for game in self.games
+            if not game.metadata_checked
+        )
+        remaining += sum(
+            1
+            for game in self.games
+            if not game.achievements_checked
+            and game.is_backlog_eligible()
+        )
 
         if was_cancelled:
             self.status_changed.emit(
@@ -880,13 +1239,13 @@ class UpdateController(QObject):
             self.status_changed.emit("all", "Missing Data: Complete")
         else:
             self.status_changed.emit(
-                "all", f"Missing Data: {remaining} still unchecked"
+                "all",
+                f"Missing Data: {remaining} still unchecked",
             )
 
         self._combined_progress = {}
         self._combined_total = 0
         self._cancel_requested = False
-
         self.busy_changed.emit(self.is_running())
 
     def cancel(self):
@@ -896,13 +1255,19 @@ class UpdateController(QObject):
         self._cancel_requested = True
 
         if self._library.is_running():
-            self.status_changed.emit("library", "Steam Library: Stopping...")
+            self.status_changed.emit(
+                "library",
+                "Steam Library: Stopping...",
+            )
+
             self._library.cancel()
 
         if self._classification.is_running():
             self.status_changed.emit(
-                "classification", "Steam Classification: Stopping..."
+                "classification",
+                "Steam Classification: Stopping...",
             )
+
             self._classification.cancel()
 
         if self._batch_worker is not None:
@@ -915,7 +1280,10 @@ class UpdateController(QObject):
             self._batch_worker.cancel()
 
         if self._combined_workers:
-            self.status_changed.emit("all", "Missing Data: Stopping...")
+            self.status_changed.emit(
+                "all",
+                "Missing Data: Stopping...",
+            )
 
             for worker in self._combined_workers.values():
                 worker.cancel()
