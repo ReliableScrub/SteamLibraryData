@@ -47,7 +47,7 @@ class SectionHeading(QLabel):
 
 
 class StatTile(QFrame):
-    def __init__(self, label, value="—", parent=None):
+    def __init__(self, label, value="-", parent=None):
         super().__init__(parent)
 
         self.setProperty("statTile", True)

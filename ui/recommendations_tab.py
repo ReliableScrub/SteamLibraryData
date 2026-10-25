@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 import requests
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
     QObject,
+    QParallelAnimationGroup,
+    QPoint,
     QPropertyAnimation,
     QRunnable,
     Qt,
@@ -83,6 +86,38 @@ class ImageWorker(QRunnable):
         )
 
 
+class SelectAllDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._editing_was_empty = False
+        line_edit = self.lineEdit()
+
+        if line_edit is not None:
+            line_edit.textEdited.connect(self._text_edited)
+
+        self.editingFinished.connect(self._normalize_empty_value)
+
+    def _text_edited(self, text):
+        suffix = self.suffix()
+        cleaned = text
+
+        if suffix and cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+
+        self._editing_was_empty = not cleaned.strip()
+
+    def _normalize_empty_value(self):
+        if self._editing_was_empty:
+            self.setValue(self.minimum())
+
+        self._editing_was_empty = False
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        QTimer.singleShot(0, self.selectAll)
+
+
 class RecommendationsTab(QWidget):
     build_busy_changed = Signal(bool)
 
@@ -99,6 +134,7 @@ class RecommendationsTab(QWidget):
         self.current_for_you_index = -1
         self._for_you_animation = None
         self._for_you_effect = None
+        self._for_you_animation_origin = None
 
         self.similar_index = None
         self.similar_reference_app_id = None
@@ -119,6 +155,10 @@ class RecommendationsTab(QWidget):
 
         self._create_controls()
         self._create_layout()
+
+        self.for_you_left_panel.viewport().installEventFilter(self)
+        self.similar_left_panel.viewport().installEventFilter(self)
+
         self._connect_signals()
         self._update_media_sizes()
         self._update_responsive_typography()
@@ -159,7 +199,7 @@ class RecommendationsTab(QWidget):
             ]
         )
 
-        self.hltb_min_filter = QDoubleSpinBox()
+        self.hltb_min_filter = SelectAllDoubleSpinBox()
         self.hltb_min_filter.setRange(0, 10000)
         self.hltb_min_filter.setDecimals(1)
         self.hltb_min_filter.setSingleStep(0.5)
@@ -167,7 +207,7 @@ class RecommendationsTab(QWidget):
         self.hltb_min_filter.setSpecialValueText("Min")
         self.hltb_min_filter.setSuffix(" h")
 
-        self.hltb_max_filter = QDoubleSpinBox()
+        self.hltb_max_filter = SelectAllDoubleSpinBox()
         self.hltb_max_filter.setRange(0, 10000)
         self.hltb_max_filter.setDecimals(1)
         self.hltb_max_filter.setSingleStep(0.5)
@@ -176,6 +216,10 @@ class RecommendationsTab(QWidget):
         self.hltb_max_filter.setSuffix(" h")
 
         self.clear_filters_button = QPushButton("Clear Filters")
+        self.clear_filters_button.setToolTip(
+            "Clear Type, Genre / Tags, and HLTB range filters."
+        )
+        self.clear_filters_button.setEnabled(False)
 
         self.mode_tabs = QTabWidget()
 
@@ -232,7 +276,7 @@ class RecommendationsTab(QWidget):
         self.for_you_summary.setVisible(False)
 
         self.for_you_match_badge = BadgeLabel("TOP PICK", tone="accent")
-        self.for_you_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.for_you_score_badge = BadgeLabel("- MATCH", tone="accent")
         self.for_you_status_badge = BadgeLabel("", tone="neutral")
         self.for_you_type_badge = BadgeLabel("", tone="neutral")
         self.for_you_reception_badge = BadgeLabel("", tone="neutral")
@@ -311,7 +355,7 @@ class RecommendationsTab(QWidget):
         self.similar_summary.setVisible(False)
 
         self.similar_match_badge = BadgeLabel("SIMILARITY", tone="accent")
-        self.similar_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.similar_score_badge = BadgeLabel("- MATCH", tone="accent")
         self.similar_status_badge = BadgeLabel("", tone="neutral")
         self.similar_type_badge = BadgeLabel("", tone="neutral")
         self.similar_reception_badge = BadgeLabel("", tone="neutral")
@@ -345,6 +389,7 @@ class RecommendationsTab(QWidget):
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setObjectName("recommendationMediaPanel")
         panel.setProperty("card", True)
+        panel.setProperty("accentCard", True)
 
     @staticmethod
     def _style_details_browser(browser):
@@ -401,7 +446,7 @@ class RecommendationsTab(QWidget):
         text = f"{percent:.0f}% positive ({total:,} reviews)"
 
         if total < PUBLIC_RECEPTION_MIN_REVIEWS:
-            text += " — Too few reviews to affect recommendations"
+            text += " - Too few reviews to affect recommendations"
 
         return text
 
@@ -515,8 +560,10 @@ class RecommendationsTab(QWidget):
 
         self.for_you_left_panel.setWidget(self.for_you_left_content)
 
-        right_panel = QWidget()
+        right_panel = QFrame()
+        right_panel.setProperty("accentCard", True)
         right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(14, 12, 14, 12)
 
         right_layout.addWidget(self.for_you_title)
 
@@ -648,8 +695,10 @@ class RecommendationsTab(QWidget):
 
         self.similar_left_panel.setWidget(self.similar_left_content)
 
-        right_panel = QWidget()
+        right_panel = QFrame()
+        right_panel.setProperty("accentCard", True)
         right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(14, 12, 14, 12)
 
         right_layout.addWidget(self.similar_title)
 
@@ -912,6 +961,7 @@ class RecommendationsTab(QWidget):
         self.build_busy_changed.emit(False)
 
     def _filters_changed(self):
+        self.clear_filters_button.setEnabled(self._has_active_filters())
         self._rebuild_for_you()
         self._apply_similar_filters()
 
@@ -1375,6 +1425,7 @@ class RecommendationsTab(QWidget):
 
     def _render_for_you_text(self, game, record):
         self.for_you_title.setText(game.name)
+        self.for_you_title.setToolTip(game.name)
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
         reception_text = self._public_reception_text(game)
@@ -1410,6 +1461,7 @@ class RecommendationsTab(QWidget):
 
     def _render_similar_text(self, game, score, reference_name):
         self.similar_title.setText(game.name)
+        self.similar_title.setToolTip(game.name)
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
         reception_text = self._public_reception_text(game)
         reception_badge, reception_tone = self._reception_badge(game)
@@ -1537,14 +1589,14 @@ class RecommendationsTab(QWidget):
 
         self.for_you_title.setText(title)
         self.for_you_match_badge.set_badge("TOP PICK", "neutral")
-        self.for_you_score_badge.set_badge("— MATCH", "neutral")
+        self.for_you_score_badge.set_badge("- MATCH", "neutral")
         self.for_you_status_badge.set_badge("NO SELECTION", "neutral")
-        self.for_you_type_badge.set_badge("—", "neutral")
-        self.for_you_reception_badge.set_badge("—", "neutral")
+        self.for_you_type_badge.set_badge("-", "neutral")
+        self.for_you_reception_badge.set_badge("-", "neutral")
         self.for_you_description.setText(message)
 
         for tile in self.for_you_stats.values():
-            tile.set_value("—")
+            tile.set_value("-")
 
         self.for_you_details.clear()
 
@@ -1557,7 +1609,7 @@ class RecommendationsTab(QWidget):
 
         new_index = (self.current_for_you_index - 1) % len(self.for_you_records)
 
-        self._animate_to_for_you_index(new_index)
+        self._animate_to_for_you_index(new_index, direction=-1)
 
     def next_for_you(self):
         if len(self.for_you_records) <= 1:
@@ -1568,9 +1620,9 @@ class RecommendationsTab(QWidget):
 
         new_index = (self.current_for_you_index + 1) % len(self.for_you_records)
 
-        self._animate_to_for_you_index(new_index)
+        self._animate_to_for_you_index(new_index, direction=1)
 
-    def _animate_to_for_you_index(self, index):
+    def _animate_to_for_you_index(self, index, direction):
         if not 0 <= index < len(self.for_you_records):
             return
 
@@ -1580,58 +1632,67 @@ class RecommendationsTab(QWidget):
         self.for_you_trailer_player.stop()
 
         effect = QGraphicsOpacityEffect(self.for_you_left_panel)
-
         effect.setOpacity(1.0)
-
         self.for_you_left_panel.setGraphicsEffect(effect)
-
         self._for_you_effect = effect
 
-        animation = QPropertyAnimation(
-            effect,
-            b"opacity",
-            self,
-        )
+        origin = self.for_you_left_panel.pos()
+        self._for_you_animation_origin = origin
+        distance = 14
 
-        animation.setDuration(120)
-        animation.setStartValue(1.0)
-        animation.setEndValue(0.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        opacity_animation = QPropertyAnimation(effect, b"opacity", self)
+        opacity_animation.setDuration(110)
+        opacity_animation.setStartValue(1.0)
+        opacity_animation.setEndValue(0.0)
+        opacity_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
+        position_animation = QPropertyAnimation(self.for_you_left_panel, b"pos", self)
+        position_animation.setDuration(110)
+        position_animation.setStartValue(origin)
+        position_animation.setEndValue(origin + QPoint(-distance * direction, 0))
+        position_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        animation = QParallelAnimationGroup(self)
+        animation.addAnimation(opacity_animation)
+        animation.addAnimation(position_animation)
         self._for_you_animation = animation
-
-        animation.finished.connect(lambda: self._for_you_fade_out_finished(index))
-
+        animation.finished.connect(
+            lambda: self._for_you_fade_out_finished(index, direction, distance)
+        )
         animation.start()
 
-    def _for_you_fade_out_finished(self, index):
+    def _for_you_fade_out_finished(self, index, direction, distance):
         if self._for_you_animation is not None:
             self._for_you_animation.deleteLater()
             self._for_you_animation = None
 
-        if self._for_you_effect is None:
+        if self._for_you_effect is None or self._for_you_animation_origin is None:
             return
 
         self.current_for_you_index = index
         self._populate_for_you_card()
 
+        origin = self._for_you_animation_origin
+        self.for_you_left_panel.move(origin + QPoint(distance * direction, 0))
         self._for_you_effect.setOpacity(0.0)
 
-        animation = QPropertyAnimation(
-            self._for_you_effect,
-            b"opacity",
-            self,
-        )
+        opacity_animation = QPropertyAnimation(self._for_you_effect, b"opacity", self)
+        opacity_animation.setDuration(140)
+        opacity_animation.setStartValue(0.0)
+        opacity_animation.setEndValue(1.0)
+        opacity_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        animation.setDuration(150)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        position_animation = QPropertyAnimation(self.for_you_left_panel, b"pos", self)
+        position_animation.setDuration(140)
+        position_animation.setStartValue(origin + QPoint(distance * direction, 0))
+        position_animation.setEndValue(origin)
+        position_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
+        animation = QParallelAnimationGroup(self)
+        animation.addAnimation(opacity_animation)
+        animation.addAnimation(position_animation)
         self._for_you_animation = animation
-
         animation.finished.connect(self._for_you_fade_in_finished)
-
         animation.start()
 
     def _for_you_fade_in_finished(self):
@@ -1639,12 +1700,12 @@ class RecommendationsTab(QWidget):
             self._for_you_animation.deleteLater()
             self._for_you_animation = None
 
-        if self._for_you_effect is None:
-            return
+        if self._for_you_animation_origin is not None:
+            self.for_you_left_panel.move(self._for_you_animation_origin)
 
         self.for_you_left_panel.setGraphicsEffect(None)
-
         self._for_you_effect = None
+        self._for_you_animation_origin = None
 
     def _cancel_for_you_animation(self):
         if self._for_you_animation is not None:
@@ -1652,12 +1713,12 @@ class RecommendationsTab(QWidget):
             self._for_you_animation.deleteLater()
             self._for_you_animation = None
 
-        if self._for_you_effect is None:
-            return
+        if self._for_you_animation_origin is not None:
+            self.for_you_left_panel.move(self._for_you_animation_origin)
 
         self.for_you_left_panel.setGraphicsEffect(None)
-
         self._for_you_effect = None
+        self._for_you_animation_origin = None
 
     def _open_selected_for_you_steam(self):
         if not 0 <= self.current_for_you_index < len(self.for_you_records):
@@ -1867,33 +1928,72 @@ class RecommendationsTab(QWidget):
         self.reference_combo.blockSignals(False)
 
     def _reference_return_pressed(self):
-        reference_app_id = self._selected_reference_app_id()
-
-        if reference_app_id is None:
-            typed_name = self.reference_combo.currentText().strip().casefold()
-
-            matches = [
-                index
-                for index in range(self.reference_combo.count())
-                if self.reference_combo.itemText(index).rsplit(" (", 1)[0].casefold()
-                == typed_name
-            ]
-
-            if len(matches) == 1:
-                self.reference_combo.setCurrentIndex(matches[0])
-
         self.find_similar_games()
 
+    def _resolve_reference_input(self):
+        current_text = self.reference_combo.currentText().strip()
+
+        if not current_text:
+            return None, "Choose a game from the reference-game list first."
+
+        current_index = self.reference_combo.currentIndex()
+
+        if current_index >= 0:
+            item_text = self.reference_combo.itemText(current_index)
+
+            if item_text.casefold() == current_text.casefold():
+                return self.reference_combo.itemData(current_index), None
+
+        full_matches = [
+            index
+            for index in range(self.reference_combo.count())
+            if self.reference_combo.itemText(index).casefold()
+            == current_text.casefold()
+        ]
+
+        if len(full_matches) == 1:
+            index = full_matches[0]
+            self.reference_combo.setCurrentIndex(index)
+            return self.reference_combo.itemData(index), None
+
+        name_matches = [
+            index
+            for index in range(self.reference_combo.count())
+            if self.reference_combo.itemText(index).rsplit(" (", 1)[0].casefold()
+            == current_text.casefold()
+        ]
+
+        if len(name_matches) == 1:
+            index = name_matches[0]
+            self.reference_combo.setCurrentIndex(index)
+            return self.reference_combo.itemData(index), None
+
+        if len(name_matches) > 1:
+            return (
+                None,
+                (
+                    f'More than one library entry is named "{current_text}". '
+                    "Choose the exact entry from the suggestions."
+                ),
+            )
+
+        return (
+            None,
+            (
+                f'No library game exactly matches "{current_text}". '
+                "Choose a game from the suggestions."
+            ),
+        )
+
     def find_similar_games(self):
-        reference_app_id = self._selected_reference_app_id()
+        reference_app_id, resolution_error = self._resolve_reference_input()
 
         if reference_app_id is None:
             QMessageBox.information(
                 self,
                 "Similar Games",
-                "Choose a game from the reference-game list first.",
+                resolution_error,
             )
-
             return
 
         reference_game = self.games_by_id.get(reference_app_id)
@@ -2001,7 +2101,7 @@ class RecommendationsTab(QWidget):
                 continue
 
             display_text = (
-                f"{game.name} — {self._friendly_score(score.adjusted_similarity)}"
+                f"{game.name} - {self._friendly_score(score.adjusted_similarity)}"
             )
 
             self.similar_result_combo.addItem(
@@ -2061,24 +2161,8 @@ class RecommendationsTab(QWidget):
         self._show_similar_score(self.similar_scores[0])
 
     def _selected_reference_app_id(self):
-        current_index = self.reference_combo.currentIndex()
-
-        current_text = self.reference_combo.currentText().strip()
-
-        if current_index >= 0:
-            item_text = self.reference_combo.itemText(current_index)
-
-            if item_text == current_text:
-                return self.reference_combo.itemData(current_index)
-
-        for index in range(self.reference_combo.count()):
-            if (
-                self.reference_combo.itemText(index).casefold()
-                == current_text.casefold()
-            ):
-                return self.reference_combo.itemData(index)
-
-        return None
+        reference_app_id, _error = self._resolve_reference_input()
+        return reference_app_id
 
     def _similar_result_changed(
         self,
@@ -2143,15 +2227,15 @@ class RecommendationsTab(QWidget):
 
         self.similar_title.setText(title)
         self.similar_match_badge.set_badge("SIMILARITY", "neutral")
-        self.similar_score_badge.set_badge("— MATCH", "neutral")
+        self.similar_score_badge.set_badge("- MATCH", "neutral")
         self.similar_status_badge.set_badge("NO SELECTION", "neutral")
-        self.similar_type_badge.set_badge("—", "neutral")
-        self.similar_reception_badge.set_badge("—", "neutral")
+        self.similar_type_badge.set_badge("-", "neutral")
+        self.similar_reception_badge.set_badge("-", "neutral")
         self.similar_context_label.setText("")
         self.similar_description.setText(message)
 
         for tile in self.similar_stats.values():
-            tile.set_value("—")
+            tile.set_value("-")
 
         self.similar_details.clear()
 
@@ -2181,7 +2265,7 @@ class RecommendationsTab(QWidget):
     @staticmethod
     def _format_hours(value):
         if value is None:
-            return "—"
+            return "-"
 
         return f"{value:.1f} h"
 
@@ -2198,7 +2282,7 @@ class RecommendationsTab(QWidget):
         )
 
     def _empty_hltb_text(self):
-        return "Main Story: —\nMain + Extra: —\nCompletionist: —\nAll Styles: —"
+        return "Main Story: -\nMain + Extra: -\nCompletionist: -\nAll Styles: -"
 
     def _request_image(
         self,
@@ -2359,19 +2443,10 @@ class RecommendationsTab(QWidget):
 
         if width >= 1700:
             title_size = 21
-            detail_size = 13
-            hltb_title_size = 13
-            hltb_size = 12
         elif width >= 1350:
             title_size = 19
-            detail_size = 12
-            hltb_title_size = 12
-            hltb_size = 11
         else:
             title_size = 17
-            detail_size = 11
-            hltb_title_size = 10
-            hltb_size = 10
 
         self.for_you_title.setStyleSheet(
             f"font-size: {title_size}pt; font-weight: bold;"
@@ -2382,19 +2457,36 @@ class RecommendationsTab(QWidget):
 
         for label in (self.for_you_hltb_title, self.similar_hltb_title):
             font = label.font()
-            font.setPointSize(hltb_title_size)
+            font.setPointSize(11)
             font.setBold(True)
             label.setFont(font)
 
-        for label in (self.for_you_hltb, self.similar_hltb):
+        for label in (
+            self.for_you_hltb,
+            self.similar_hltb,
+            self.for_you_description,
+            self.similar_description,
+        ):
             font = label.font()
-            font.setPointSize(hltb_size)
+            font.setPointSize(11)
             label.setFont(font)
 
         for browser in (self.for_you_details, self.similar_details):
             font = browser.font()
-            font.setPointSize(detail_size)
+            font.setPointSize(11)
             browser.setFont(font)
+
+    def eventFilter(self, watched, event):
+        if watched in (
+            self.for_you_left_panel.viewport(),
+            self.similar_left_panel.viewport(),
+        ) and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        ):
+            QTimer.singleShot(0, self._update_media_sizes)
+
+        return super().eventFilter(watched, event)
 
     def refresh_theme(self):
         for browser in (self.for_you_details, self.similar_details):

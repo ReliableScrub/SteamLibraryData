@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 from PySide6.QtCore import QAbstractTableModel, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPalette
+from PySide6.QtWidgets import QApplication
 
 
 class GameTableModel(QAbstractTableModel):
@@ -23,6 +25,7 @@ class GameTableModel(QAbstractTableModel):
         self.steam_type_resolver = None
         self.ratings = {}
         self.hltb_metric = "Main Story"
+        self.sort_column = None
 
     def rowCount(self, parent=None):
         return len(self.games)
@@ -34,11 +37,17 @@ class GameTableModel(QAbstractTableModel):
         if not index.isValid():
             return None
 
+        column = index.column()
+
+        if role == Qt.ItemDataRole.BackgroundRole and column == self.sort_column:
+            color = QColor(QApplication.palette().color(QPalette.ColorRole.Highlight))
+            color.setAlpha(30)
+            return QBrush(color)
+
         if role != Qt.ItemDataRole.DisplayRole:
             return None
 
         game = self.games[index.row()]
-        column = index.column()
 
         if column == 0:
             return game.name
@@ -91,14 +100,9 @@ class GameTableModel(QAbstractTableModel):
             return f"{game.achievements_unlocked}/{game.achievement_total}"
 
         if column == 7:
-            if game.classification_updated_at is None:
-                return "Not Checked"
-
-            if self.steam_type_resolver is not None:
-                return self.steam_type_resolver(game)
-
             steam_type_names = {
                 "game": "Game",
+                "test": "Test / Beta",
                 "software": "Software",
                 "dlc": "DLC",
                 "video": "Video",
@@ -106,21 +110,65 @@ class GameTableModel(QAbstractTableModel):
                 "unknown": "Unknown",
             }
 
-            return steam_type_names.get(game.steam_type, "Unknown")
+            inferred_type = game.steam_type
+
+            if self.steam_type_resolver is not None:
+                inferred_type = self.steam_type_resolver(game)
+
+            if inferred_type == "test":
+                if game.steam_type == "unknown":
+                    return "Unknown (Test / Beta)"
+
+                return "Test / Beta"
+
+            if game.classification_updated_at is None:
+                return "Not Checked"
+
+            if game.steam_type == "unknown" and inferred_type == "game":
+                return "Unknown (Game)"
+
+            if game.steam_type == "unknown" and inferred_type == "software":
+                return "Unknown (Software)"
+
+            return steam_type_names.get(
+                game.steam_type,
+                "Unknown",
+            )
 
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role != Qt.ItemDataRole.DisplayRole:
+        if orientation == Qt.Orientation.Horizontal:
+            if role == Qt.ItemDataRole.DisplayRole:
+                if section == 5:
+                    return f"HLTB ({self.hltb_metric})"
+
+                return self.HEADERS[section]
+
+            if section == self.sort_column:
+                if role == Qt.ItemDataRole.ForegroundRole:
+                    return QBrush(
+                        QApplication.palette().color(QPalette.ColorRole.Highlight)
+                    )
+
+                if role == Qt.ItemDataRole.BackgroundRole:
+                    color = QColor(
+                        QApplication.palette().color(QPalette.ColorRole.Highlight)
+                    )
+                    color.setAlpha(55)
+                    return QBrush(color)
+
+                if role == Qt.ItemDataRole.FontRole:
+                    font = QFont(QApplication.font())
+                    font.setBold(True)
+                    return font
+
             return None
 
-        if orientation == Qt.Orientation.Horizontal:
-            if section == 5:
-                return f"HLTB ({self.hltb_metric})"
+        if role == Qt.ItemDataRole.DisplayRole:
+            return section + 1
 
-            return self.HEADERS[section]
-
-        return section + 1
+        return None
 
     def set_games(self, games):
         self.beginResetModel()
@@ -132,6 +180,31 @@ class GameTableModel(QAbstractTableModel):
             return self.games[row]
 
         return None
+
+    def set_sort_column(self, column):
+        if column == self.sort_column:
+            return
+
+        previous = self.sort_column
+        self.sort_column = column
+
+        changed_sections = [
+            section for section in (previous, column) if isinstance(section, int)
+        ]
+
+        for section in changed_sections:
+            self.headerDataChanged.emit(
+                Qt.Orientation.Horizontal,
+                section,
+                section,
+            )
+
+        if self.games:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(len(self.games) - 1, self.columnCount() - 1),
+                [Qt.ItemDataRole.BackgroundRole],
+            )
 
     def set_hltb_metric(self, metric):
         if self.hltb_metric == metric:

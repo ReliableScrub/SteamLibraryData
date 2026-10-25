@@ -954,14 +954,14 @@ class UpdateController(QObject):
         if source is not None and was_cancelled:
             self.status_changed.emit(
                 source,
-                f"{self._source_title(source)}: Cancelled — "
+                f"{self._source_title(source)}: Cancelled - "
                 f"{processed} processed, {failure_count} failed",
             )
         elif source is not None and failure_count:
             succeeded = max(processed - failure_count, 0)
             self.status_changed.emit(
                 source,
-                f"{self._source_title(source)}: Complete — "
+                f"{self._source_title(source)}: Complete - "
                 f"{succeeded} succeeded, {failure_count} failed",
             )
 
@@ -1195,7 +1195,7 @@ class UpdateController(QObject):
         if was_cancelled:
             self.status_changed.emit(
                 "all",
-                f"Missing Data: Cancelled — {processed} processed, "
+                f"Missing Data: Cancelled - {processed} processed, "
                 f"{failure_count} failed, {remaining} still unchecked",
             )
         elif failure_count:

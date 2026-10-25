@@ -3,7 +3,7 @@ import time
 from datetime import UTC, datetime
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -181,6 +182,32 @@ class SelectedGameRefreshController(QObject):
 
 
 class SelectAllDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self._editing_was_empty = False
+        line_edit = self.lineEdit()
+
+        if line_edit is not None:
+            line_edit.textEdited.connect(self._text_edited)
+
+        self.editingFinished.connect(self._normalize_empty_value)
+
+    def _text_edited(self, text):
+        suffix = self.suffix()
+        cleaned = text
+
+        if suffix and cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+
+        self._editing_was_empty = not cleaned.strip()
+
+    def _normalize_empty_value(self):
+        if self._editing_was_empty:
+            self.setValue(self.minimum())
+
+        self._editing_was_empty = False
+
     def focusInEvent(self, event):
         super().focusInEvent(event)
 
@@ -188,6 +215,16 @@ class SelectAllDoubleSpinBox(QDoubleSpinBox):
             0,
             self.selectAll,
         )
+
+
+class EscapeClearsLineEdit(QLineEdit):
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.text():
+            self.clear()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
 
 class LibraryTab(QWidget):
@@ -218,8 +255,7 @@ class LibraryTab(QWidget):
         self.apply_filters()
 
     def _create_filter_controls(self):
-        self.search_box = QLineEdit()
-
+        self.search_box = EscapeClearsLineEdit()
         self.search_box.setPlaceholderText("Search games...")
 
         self.status_filter = QComboBox()
@@ -235,6 +271,8 @@ class LibraryTab(QWidget):
                 "All Types",
                 "Backlog Eligible",
                 "Game",
+                "Test / Beta",
+                "Unknown (Test / Beta)",
                 "Unknown (Game)",
                 "Software",
                 "Unknown (Software)",
@@ -273,6 +311,9 @@ class LibraryTab(QWidget):
         self.genre_tag_filter.set_available_from_games(self.games)
 
         self.clear_genre_tag_button = QPushButton("Clear Genres / Tags")
+        self.clear_genre_tag_button.setToolTip(
+            "Clear only the selected Genre and Tag filters."
+        )
         self.clear_genre_tag_button.setEnabled(
             self.genre_tag_filter.has_active_filters()
         )
@@ -292,11 +333,39 @@ class LibraryTab(QWidget):
         )
 
         self.pick_button = QPushButton("Pick Something For Me")
+        self.clear_filters_button = QPushButton("Clear Filters")
+        self.clear_filters_button.setToolTip(
+            "Clear search, standard filters, Genre / Tags, and Advanced Filters."
+        )
+        self.clear_filters_button.setEnabled(False)
+
+        self.summary_label = QLabel("")
+        self.summary_label.setProperty("summaryText", True)
+
+        self.filter_chip_widget = QWidget()
+        self.filter_chip_layout = QHBoxLayout(self.filter_chip_widget)
+        self.filter_chip_layout.setContentsMargins(0, 0, 0, 0)
+        self.filter_chip_layout.setSpacing(6)
+        self.filter_chip_widget.setVisible(False)
+
+        self.no_results_frame = QFrame()
+        self.no_results_frame.setProperty("noResults", True)
+        no_results_layout = QHBoxLayout(self.no_results_frame)
+        no_results_layout.setContentsMargins(12, 8, 12, 8)
+        self.no_results_label = QLabel("No games match the current filters.")
+        self.no_results_clear_button = QPushButton("Clear Filters")
+        no_results_layout.addWidget(self.no_results_label)
+        no_results_layout.addStretch()
+        no_results_layout.addWidget(self.no_results_clear_button)
+        self.no_results_frame.setVisible(False)
 
         self.advanced_toggle_button = QPushButton("Advanced Filters ▸")
         self.advanced_toggle_button.setCheckable(True)
 
         self.advanced_clear_button = QPushButton("Clear Advanced")
+        self.advanced_clear_button.setToolTip(
+            "Clear only the filters inside Advanced Filters."
+        )
 
         self.achievement_filter = QComboBox()
         self.achievement_filter.addItems(
@@ -370,7 +439,7 @@ class LibraryTab(QWidget):
         self.game_table_model = GameTableModel(self.filtered_games, self)
 
         self.game_table_model.set_steam_type_resolver(
-            self.genre_tag_filter.display_steam_type
+            self.genre_tag_filter.inferred_steam_type
         )
 
         self.game_table_model.set_ratings(load_game_ratings())
@@ -378,6 +447,7 @@ class LibraryTab(QWidget):
         self.table.setModel(self.game_table_model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setAlternatingRowColors(True)
 
         header = self.table.horizontalHeader()
         header.setSectionsClickable(True)
@@ -408,8 +478,6 @@ class LibraryTab(QWidget):
 
         self.status_label = QLabel("Status:")
 
-        self.status_label.setStyleSheet("font-size: 10pt;")
-
         self.status_value = BadgeLabel("NO GAME", tone="neutral")
 
         self.type_badge = BadgeLabel("", tone="neutral")
@@ -426,7 +494,6 @@ class LibraryTab(QWidget):
         self.manual_status_combo.setEnabled(False)
 
         self.rating_label = QLabel("Your Rating:")
-        self.rating_label.setStyleSheet("font-size: 10pt;")
 
         self.rating_combo = QComboBox()
         self.rating_combo.addItems(
@@ -514,6 +581,13 @@ class LibraryTab(QWidget):
         secondary_filter_row.addWidget(self.rating_filter)
         secondary_filter_row.addStretch()
 
+        summary_frame = QFrame()
+        summary_frame.setProperty("summaryStrip", True)
+        summary_layout = QHBoxLayout(summary_frame)
+        summary_layout.setContentsMargins(12, 7, 12, 7)
+        summary_layout.addWidget(self.summary_label, 1)
+        summary_layout.addWidget(self.clear_filters_button)
+
         self.details_panel = QScrollArea()
         self.details_panel.setWidgetResizable(True)
         self.details_panel.setFrameShape(QFrame.Shape.NoFrame)
@@ -526,6 +600,7 @@ class LibraryTab(QWidget):
         self.details_panel.setMinimumWidth(320)
 
         self.details_content = QWidget()
+        self.details_content.setProperty("accentCard", True)
         details_layout = QVBoxLayout(self.details_content)
         details_layout.setContentsMargins(12, 12, 12, 12)
         details_layout.setSpacing(8)
@@ -658,18 +733,23 @@ class LibraryTab(QWidget):
         layout.addLayout(search_row)
         layout.addLayout(primary_filter_row)
         layout.addLayout(secondary_filter_row)
+        layout.addWidget(summary_frame)
+        layout.addWidget(self.filter_chip_widget)
         layout.addLayout(advanced_header_row)
         layout.addWidget(self.advanced_panel)
+        layout.addWidget(self.no_results_frame)
         layout.addWidget(self.splitter, 1)
 
     def _connect_signals(self):
-        self.search_box.textChanged.connect(self.apply_filters)
+        self.search_box.textChanged.connect(self._search_changed)
 
         self.status_filter.currentTextChanged.connect(self._library_filter_changed)
         self.type_filter.currentTextChanged.connect(self._library_filter_changed)
         self.hltb_metric_filter.currentTextChanged.connect(self._hltb_metric_changed)
         self.genre_tag_filter.filters_changed.connect(self._genre_tag_filters_changed)
         self.clear_genre_tag_button.clicked.connect(self.genre_tag_filter.clear_filters)
+        self.clear_filters_button.clicked.connect(self.clear_filters)
+        self.no_results_clear_button.clicked.connect(self.clear_filters)
 
         self.hltb_min_filter.valueChanged.connect(self.hltb_min_changed)
         self.hltb_max_filter.valueChanged.connect(self.hltb_max_changed)
@@ -711,8 +791,13 @@ class LibraryTab(QWidget):
         if update_controller is not None:
             update_controller.busy_changed.connect(self._global_update_busy_changed)
 
-        self.splitter.splitterMoved.connect(self.update_media_sizes)
-        self.rating_filter.currentTextChanged.connect(self.apply_filters)
+        self.splitter.splitterMoved.connect(self._splitter_moved)
+        self.rating_filter.currentTextChanged.connect(self._library_filter_changed)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_table_context_menu)
+
+        self.find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        self.find_shortcut.activated.connect(self._focus_search)
 
         self.advanced_toggle_button.toggled.connect(self._advanced_expanded_changed)
         self.advanced_clear_button.clicked.connect(self.clear_advanced_filters)
@@ -767,6 +852,46 @@ class LibraryTab(QWidget):
 
         self.clear_game_details()
 
+    def _show_table_context_menu(self, position):
+        index = self.table.indexAt(position)
+
+        if not index.isValid():
+            return
+
+        self.table.selectRow(index.row())
+        game = self.game_table_model.game_at(index.row())
+
+        if game is None:
+            return
+
+        menu = QMenu(self)
+        open_action = menu.addAction("Open Steam Page")
+        menu.addSeparator()
+        refresh_hltb_action = menu.addAction("Refresh HLTB")
+        refresh_metadata_action = menu.addAction("Refresh Genre / Tags")
+        refresh_achievements_action = menu.addAction("Refresh Achievements")
+
+        refresh_hltb_action.setEnabled(
+            self._selected_refresh_unavailable_reason("hltb") is None
+        )
+        refresh_metadata_action.setEnabled(
+            self._selected_refresh_unavailable_reason("metadata") is None
+        )
+        refresh_achievements_action.setEnabled(
+            self._selected_refresh_unavailable_reason("achievements") is None
+        )
+
+        action = menu.exec(self.table.viewport().mapToGlobal(position))
+
+        if action == open_action:
+            self.open_selected_steam_page()
+        elif action == refresh_hltb_action:
+            self._refresh_selected_game("hltb")
+        elif action == refresh_metadata_action:
+            self._refresh_selected_game("metadata")
+        elif action == refresh_achievements_action:
+            self._refresh_selected_game("achievements")
+
     def current_hltb_time(self, game):
         metric = self.hltb_metric_filter.currentText()
 
@@ -789,6 +914,25 @@ class LibraryTab(QWidget):
 
             if index >= 0:
                 combo.setCurrentIndex(index)
+
+        search_text = settings.get("search")
+
+        if isinstance(search_text, str):
+            self.search_box.setText(search_text)
+
+        rating = settings.get("rating")
+
+        if isinstance(rating, str):
+            rating_index = self.rating_filter.findText(rating)
+
+            if rating_index >= 0:
+                self.rating_filter.setCurrentIndex(rating_index)
+
+        self.genre_tag_filter.set_selected_filters(
+            settings.get("game_genres", ()),
+            settings.get("software_genres", ()),
+            settings.get("tags", ()),
+        )
 
         hltb_min = settings.get("hltb_min")
         hltb_max = settings.get("hltb_max")
@@ -871,15 +1015,32 @@ class LibraryTab(QWidget):
                 self.header_sort_column,
                 self.header_sort_order,
             )
+            self.game_table_model.set_sort_column(self.header_sort_column)
+
+        splitter_sizes = settings.get("splitter_sizes")
+
+        if (
+            isinstance(splitter_sizes, list)
+            and len(splitter_sizes) == 2
+            and all(isinstance(size, int) and size > 0 for size in splitter_sizes)
+        ):
+            self.splitter.setSizes(splitter_sizes)
 
     def _save_library_view(self):
         set_library_view_settings(
             {
+                "search": self.search_box.text(),
                 "status": self.status_filter.currentText(),
                 "type": self.type_filter.currentText(),
+                "rating": self.rating_filter.currentText(),
                 "hltb_metric": self.hltb_metric_filter.currentText(),
                 "hltb_min": self.hltb_min_filter.value(),
                 "hltb_max": self.hltb_max_filter.value(),
+                "game_genres": list(self.genre_tag_filter.selected_game_genres()),
+                "software_genres": list(
+                    self.genre_tag_filter.selected_software_genres()
+                ),
+                "tags": list(self.genre_tag_filter.selected_tags()),
                 "advanced_filters": {
                     "expanded": self.advanced_toggle_button.isChecked(),
                     "achievement_mode": self.achievement_filter.currentText(),
@@ -902,8 +1063,21 @@ class LibraryTab(QWidget):
                     if self.header_sort_order == Qt.SortOrder.DescendingOrder
                     else "ascending"
                 ),
+                "splitter_sizes": self.splitter.sizes(),
             }
         )
+
+    def _focus_search(self):
+        self.search_box.setFocus()
+        self.search_box.selectAll()
+
+    def _search_changed(self, *_):
+        self.apply_filters()
+        self._save_library_view()
+
+    def _splitter_moved(self, *_):
+        self.update_media_sizes()
+        self._save_library_view()
 
     def _library_filter_changed(self):
         self.apply_filters()
@@ -914,12 +1088,297 @@ class LibraryTab(QWidget):
             self.genre_tag_filter.has_active_filters()
         )
         self.apply_filters()
+        self._save_library_view()
 
     def _hltb_metric_changed(self, *_):
         self._library_filter_changed()
 
         if self.selected_game is not None:
             self._update_game_details_text(self.selected_game)
+
+    def clear_filters(self):
+        controls = [
+            self.search_box,
+            self.status_filter,
+            self.type_filter,
+            self.rating_filter,
+            self.hltb_metric_filter,
+            self.hltb_min_filter,
+            self.hltb_max_filter,
+            self.achievement_filter,
+            self.achievement_percent_filter,
+            self.achievement_remaining_filter,
+            self.playtime_hltb_filter,
+            self.playtime_hltb_percent_filter,
+            self.last_played_filter,
+            self.data_completeness_filter,
+            self.genre_tag_filter,
+        ]
+
+        for control in controls:
+            control.blockSignals(True)
+
+        try:
+            self.search_box.clear()
+            self.status_filter.setCurrentText("All")
+            self.type_filter.setCurrentText("All Types")
+            self.rating_filter.setCurrentText("All Ratings")
+            self.hltb_metric_filter.setCurrentText("Main Story")
+            self.hltb_min_filter.setValue(0)
+            self.hltb_max_filter.setValue(0)
+            self.achievement_filter.setCurrentText("Any")
+            self.achievement_percent_filter.setValue(75)
+            self.achievement_remaining_filter.setValue(5)
+            self.playtime_hltb_filter.setCurrentText("Any")
+            self.playtime_hltb_percent_filter.setValue(80)
+            self.last_played_filter.setCurrentText("Any")
+            self.data_completeness_filter.setCurrentText("Any")
+            self.genre_tag_filter.clear_filters()
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
+        self.clear_genre_tag_button.setEnabled(False)
+        self._update_advanced_filter_controls()
+        self.apply_filters()
+        self._save_library_view()
+
+    def _clear_hltb_range(self):
+        self.hltb_min_filter.setValue(0)
+        self.hltb_max_filter.setValue(0)
+
+    def _clear_advanced_mode(self, control):
+        control.setCurrentText("Any")
+
+    def _active_filter_specs(self):
+        specs = []
+        search_text = self.search_box.text().strip()
+
+        if search_text:
+            specs.append(
+                (
+                    f'Search: "{search_text}"',
+                    lambda checked=False: self.search_box.clear(),
+                )
+            )
+
+        status = self.status_filter.currentText()
+
+        if status != "All":
+            specs.append(
+                (
+                    f"Status: {status}",
+                    lambda checked=False: self.status_filter.setCurrentText("All"),
+                )
+            )
+
+        steam_type = self.type_filter.currentText()
+
+        if steam_type != "All Types":
+            specs.append(
+                (
+                    f"Type: {steam_type}",
+                    lambda checked=False: self.type_filter.setCurrentText("All Types"),
+                )
+            )
+
+        min_hours = self.hltb_min_filter.value()
+        max_hours = self.hltb_max_filter.value()
+
+        if min_hours > 0 or max_hours > 0:
+            lower = f"{min_hours:g}h" if min_hours > 0 else "Min"
+            upper = f"{max_hours:g}h" if max_hours > 0 else "Max"
+            metric = self.hltb_metric_filter.currentText()
+            specs.append(
+                (
+                    f"HLTB {metric}: {lower}–{upper}",
+                    lambda checked=False: self._clear_hltb_range(),
+                )
+            )
+
+        for genre in self.genre_tag_filter.selected_game_genres():
+            specs.append(
+                (
+                    f"Genre: {genre}",
+                    lambda checked=False, value=genre: (
+                        self.genre_tag_filter.remove_filter("game_genre", value)
+                    ),
+                )
+            )
+
+        for genre in self.genre_tag_filter.selected_software_genres():
+            specs.append(
+                (
+                    f"Software genre: {genre}",
+                    lambda checked=False, value=genre: (
+                        self.genre_tag_filter.remove_filter("software_genre", value)
+                    ),
+                )
+            )
+
+        for tag in self.genre_tag_filter.selected_tags():
+            specs.append(
+                (
+                    f"Tag: {tag}",
+                    lambda checked=False, value=tag: (
+                        self.genre_tag_filter.remove_filter("tag", value)
+                    ),
+                )
+            )
+
+        rating = self.rating_filter.currentText()
+
+        if rating != "All Ratings":
+            specs.append(
+                (
+                    f"Rating: {rating}",
+                    lambda checked=False: self.rating_filter.setCurrentText(
+                        "All Ratings"
+                    ),
+                )
+            )
+
+        achievement_mode = self.achievement_filter.currentText()
+
+        if achievement_mode != "Any":
+            achievement_value = achievement_mode
+
+            if achievement_mode == "At least % unlocked":
+                achievement_value = (
+                    f"At least {self.achievement_percent_filter.value()}% unlocked"
+                )
+            elif achievement_mode == "Remaining at most":
+                achievement_value = (
+                    f"{self.achievement_remaining_filter.value()} remaining at most"
+                )
+
+            specs.append(
+                (
+                    f"Achievements: {achievement_value}",
+                    lambda checked=False: self._clear_advanced_mode(
+                        self.achievement_filter
+                    ),
+                )
+            )
+
+        playtime_mode = self.playtime_hltb_filter.currentText()
+
+        if playtime_mode != "Any":
+            playtime_value = playtime_mode
+
+            if playtime_mode == "Custom % of Completionist":
+                playtime_value = (
+                    f"{self.playtime_hltb_percent_filter.value()}% of Completionist"
+                )
+
+            specs.append(
+                (
+                    f"Playtime vs HLTB: {playtime_value}",
+                    lambda checked=False: self._clear_advanced_mode(
+                        self.playtime_hltb_filter
+                    ),
+                )
+            )
+
+        last_played = self.last_played_filter.currentText()
+
+        if last_played != "Any":
+            specs.append(
+                (
+                    f"Last played: {last_played}",
+                    lambda checked=False: self._clear_advanced_mode(
+                        self.last_played_filter
+                    ),
+                )
+            )
+
+        data_mode = self.data_completeness_filter.currentText()
+
+        if data_mode != "Any":
+            specs.append(
+                (
+                    f"Data: {data_mode}",
+                    lambda checked=False: self._clear_advanced_mode(
+                        self.data_completeness_filter
+                    ),
+                )
+            )
+
+        return specs
+
+    def _update_filter_summary(self):
+        specs = self._active_filter_specs()
+
+        while self.filter_chip_layout.count():
+            item = self.filter_chip_layout.takeAt(0)
+            widget = item.widget()
+
+            if widget is not None:
+                widget.deleteLater()
+
+        visible_specs = specs[:4]
+
+        for label, callback in visible_specs:
+            display_label = label if len(label) <= 32 else f"{label[:29]}…"
+            chip = QPushButton(f"{display_label}  ×")
+            chip.setProperty("filterChip", True)
+            chip.setToolTip(f"{label}\nClick to remove this filter.")
+            chip.clicked.connect(callback)
+            self.filter_chip_layout.addWidget(chip)
+
+        hidden_count = len(specs) - len(visible_specs)
+
+        if hidden_count > 0:
+            more_label = QLabel(f"+{hidden_count} more")
+            more_label.setProperty("context", "muted")
+            self.filter_chip_layout.addWidget(more_label)
+
+        if specs:
+            self.filter_chip_layout.addStretch()
+
+        self.filter_chip_widget.setVisible(bool(specs))
+        self.clear_filters_button.setEnabled(bool(specs))
+
+        total = len(self.games)
+        backlog = sum(
+            1
+            for game in self.games
+            if game.effective_status() == "Backlog"
+            and self.genre_tag_filter.is_backlog_eligible(game)
+        )
+        completed = sum(
+            1 for game in self.games if game.effective_status() == "Completed"
+        )
+        shown = len(self.filtered_games)
+
+        summary = (
+            f"{total:,} total  •  {backlog:,} backlog  •  "
+            f"{completed:,} completed  •  {shown:,} shown"
+        )
+
+        if specs:
+            summary += f"  •  {len(specs)} filters active"
+
+        self.summary_label.setText(summary)
+
+        has_no_results = not self.filtered_games
+        self.no_results_frame.setVisible(has_no_results)
+
+        if not self.games:
+            self.no_results_label.setText(
+                "The library is empty. Use Maintenance > Refresh Steam Library "
+                "to import your Steam games."
+            )
+            self.no_results_clear_button.setVisible(False)
+        elif has_no_results:
+            self.no_results_label.setText(
+                "No games match the current filters."
+                if specs
+                else "No games are available in the current library."
+            )
+            self.no_results_clear_button.setVisible(bool(specs))
+        else:
+            self.no_results_clear_button.setVisible(False)
 
     def _advanced_expanded_changed(self, expanded):
         self.advanced_panel.setVisible(expanded)
@@ -949,6 +1408,17 @@ class LibraryTab(QWidget):
 
         self.playtime_hltb_percent_label.setEnabled(custom_hltb)
         self.playtime_hltb_percent_filter.setEnabled(custom_hltb)
+
+        advanced_active = any(
+            combo.currentText() != "Any"
+            for combo in (
+                self.achievement_filter,
+                self.playtime_hltb_filter,
+                self.last_played_filter,
+                self.data_completeness_filter,
+            )
+        )
+        self.advanced_clear_button.setEnabled(advanced_active)
 
     def clear_advanced_filters(self):
         controls = [
@@ -1137,6 +1607,9 @@ class LibraryTab(QWidget):
         self._save_library_view()
 
     def apply_filters(self):
+        selected_app_id = (
+            self.selected_game.app_id if self.selected_game is not None else None
+        )
         filtered_games = self.games
 
         selected_hltb_metric = self.hltb_metric_filter.currentText()
@@ -1256,6 +1729,18 @@ class LibraryTab(QWidget):
         # 9. PUSH RESULT INTO TABLE
         self.filtered_games = filtered_games
         self.game_table_model.set_games(filtered_games)
+        self._update_filter_summary()
+
+        if selected_app_id is None:
+            return
+
+        for row, game in enumerate(filtered_games):
+            if game.app_id == selected_app_id:
+                self.table.selectRow(row)
+                return
+
+        self.table.clearSelection()
+        self.clear_game_details()
 
     def _set_detail_content_visible(self, visible):
         self.empty_details_label.setVisible(not visible)
@@ -1321,9 +1806,35 @@ class LibraryTab(QWidget):
         text = f"{percent:.0f}% positive ({total:,} reviews)"
 
         if total < PUBLIC_RECEPTION_MIN_REVIEWS:
-            text += " — Too few reviews to affect recommendations"
+            text += " - Too few reviews to affect recommendations"
 
         return text
+
+    @staticmethod
+    def _refresh_age_text(timestamp):
+        if not timestamp:
+            return "Never"
+
+        age_seconds = max(int(time.time()) - int(timestamp), 0)
+
+        if age_seconds < 60:
+            return "Just now"
+
+        if age_seconds < 60 * 60:
+            minutes = age_seconds // 60
+            return f"{minutes}m ago"
+
+        if age_seconds < 24 * 60 * 60:
+            hours = age_seconds // (60 * 60)
+            return f"{hours}h ago"
+
+        if age_seconds < 7 * 24 * 60 * 60:
+            days = age_seconds // (24 * 60 * 60)
+            return f"{days}d ago"
+
+        return (
+            datetime.fromtimestamp(timestamp, tz=UTC).astimezone().strftime("%b %d, %Y")
+        )
 
     @staticmethod
     def _description_text(game):
@@ -1414,6 +1925,12 @@ class LibraryTab(QWidget):
 
         self.game_description.setText(description_text)
 
+        refresh_text = (
+            f"HLTB {self._refresh_age_text(game.hltb_updated_at)}"
+            f" • Genre / Tags {self._refresh_age_text(game.metadata_updated_at)}"
+            f" • Achievements {self._refresh_age_text(game.achievements_updated_at)}"
+        )
+
         self.game_details.setText(
             f"Last played: {last_played_text}\n"
             f"Last 2 weeks: {recent_activity_text}\n\n"
@@ -1421,7 +1938,8 @@ class LibraryTab(QWidget):
             f"Steam Type: {steam_type_text}\n"
             f"Public Reception: {reception_text}\n"
             f"HLTB ({hltb_metric}): {hltb_text}\n"
-            f"Achievements: {achievement_text}\n\n"
+            f"Achievements: {achievement_text}\n"
+            f"Data refreshed: {refresh_text}\n\n"
             f"Genres: {genres}\n\n"
             f"Tags: {tags}"
         )
@@ -1443,6 +1961,7 @@ class LibraryTab(QWidget):
         self._set_detail_content_visible(True)
         self.trailer_player.set_game(game.app_id)
         self.game_title.setText(game.name)
+        self.game_title.setToolTip(game.name)
         self.selected_game = game
 
         status = game.effective_status()
@@ -1461,7 +1980,6 @@ class LibraryTab(QWidget):
         self.reception_badge.setVisible(True)
 
         self.manual_status_combo.blockSignals(True)
-        self.manual_status_combo.setStyleSheet("font-size: 10pt;")
 
         if game.manual_status is None:
             self.manual_status_combo.setCurrentText("Automatic")
@@ -1482,7 +2000,7 @@ class LibraryTab(QWidget):
         self._request_short_description(game)
 
         self.steam_page_button.setEnabled(True)
-        self.selected_refresh_status.setText("")
+        self._set_selected_refresh_status("")
         self._set_detail_content_visible(True)
         self._update_selected_refresh_enabled()
 
@@ -1546,7 +2064,8 @@ class LibraryTab(QWidget):
             game.manual_status = selected_status
 
         save_manual_status(game)
-        self.status_value.setText(game.effective_status())
+        status = game.effective_status()
+        self.status_value.set_badge(status.upper(), self._status_tone(status))
         self.refresh_data()
 
         self.data_changed.emit()
@@ -1631,14 +2150,28 @@ class LibraryTab(QWidget):
 
         button_row = QHBoxLayout()
         accept_button = QPushButton("Accept Match")
-        no_match_button = QPushButton("No Match")
+        accept_button.setProperty("role", "primary")
+        accept_button.setToolTip("Use the selected HLTB entry for this Steam game.")
+
         skip_button = QPushButton("Skip")
+        skip_button.setToolTip(
+            "Leave this game pending and continue to the next review item."
+        )
+
+        no_match_button = QPushButton("No Match")
+        no_match_button.setProperty("role", "warning")
+        no_match_button.setToolTip(
+            "Mark this game as checked with no usable HLTB match."
+        )
+
         close_button = QPushButton("Close Review")
+        close_button.setToolTip(
+            "Stop reviewing. Remaining games stay pending for later."
+        )
 
         button_row.addWidget(accept_button)
-        button_row.addWidget(no_match_button)
         button_row.addWidget(skip_button)
-
+        button_row.addWidget(no_match_button)
         button_row.addWidget(close_button)
         layout.addLayout(button_row)
 
@@ -1729,31 +2262,56 @@ class LibraryTab(QWidget):
 
         return result["action"]
 
+    def _set_selected_refresh_status(self, text, tone=None):
+        self.selected_refresh_status.setText(text)
+        self.selected_refresh_status.setProperty("status", tone or "")
+        style = self.selected_refresh_status.style()
+
+        if style is not None:
+            style.unpolish(self.selected_refresh_status)
+            style.polish(self.selected_refresh_status)
+
+        self.selected_refresh_status.update()
+
     def _main_window(self):
         return self.window()
 
+    def _selected_refresh_unavailable_reason(self, source):
+        if self.selected_game is None:
+            return "Select a game first."
+
+        if self._global_update_busy:
+            return "Finish or cancel the current Maintenance update first."
+
+        if self._selected_refresh_busy:
+            return "Another selected-game refresh is already running."
+
+        if source == "achievements":
+            main_window = self._main_window()
+            steam_id = getattr(main_window, "steam_id", None)
+            steam_api_key = getattr(main_window, "steam_api_key", None)
+
+            if not steam_id:
+                return "A SteamID64 is required to refresh achievements."
+
+            if not steam_api_key:
+                return "A Steam Web API key is required to refresh achievements."
+
+        return None
+
     def _refresh_selected_game(self, source):
-        game = self.selected_game
+        reason = self._selected_refresh_unavailable_reason(source)
 
-        if game is None:
-            return
-
-        main_window = self._main_window()
-
-        update_controller = getattr(
-            main_window,
-            "update_controller",
-            None,
-        )
-
-        if update_controller is not None and update_controller.is_running():
+        if reason is not None:
             QMessageBox.information(
                 self,
-                "Data Update Running",
-                "Finish or cancel the current Maintenance update before "
-                "refreshing an individual game.",
+                "Refresh Unavailable",
+                reason,
             )
             return
+
+        game = self.selected_game
+        main_window = self._main_window()
 
         steam_id = getattr(
             main_window,
@@ -1773,8 +2331,9 @@ class LibraryTab(QWidget):
             "achievements": "Achievements",
         }
 
-        self.selected_refresh_status.setText(
-            f"Refreshing {source_labels[source]} for {game.name}..."
+        self._set_selected_refresh_status(
+            f"Refreshing {source_labels[source]} for {game.name}...",
+            "accent",
         )
 
         started = self._selected_refresh_controller.start(
@@ -1785,8 +2344,9 @@ class LibraryTab(QWidget):
         )
 
         if not started:
-            self.selected_refresh_status.setText(
-                "Another selected-game refresh is already running."
+            self._set_selected_refresh_status(
+                "Another selected-game refresh is already running.",
+                "warning",
             )
 
     def _selected_refresh_busy_changed(self, busy):
@@ -1798,15 +2358,28 @@ class LibraryTab(QWidget):
         self._update_selected_refresh_enabled()
 
     def _update_selected_refresh_enabled(self):
-        enabled = (
-            self.selected_game is not None
-            and not self._selected_refresh_busy
-            and not self._global_update_busy
+        controls = (
+            (
+                "hltb",
+                self.refresh_hltb_button,
+                "Run a fresh HowLongToBeat lookup for the selected game.",
+            ),
+            (
+                "metadata",
+                self.refresh_metadata_button,
+                "Refresh genre and tag data for the selected game.",
+            ),
+            (
+                "achievements",
+                self.refresh_achievements_button,
+                "Refresh Steam achievement progress for the selected game.",
+            ),
         )
 
-        self.refresh_hltb_button.setEnabled(enabled)
-        self.refresh_metadata_button.setEnabled(enabled)
-        self.refresh_achievements_button.setEnabled(enabled)
+        for source, button, enabled_tooltip in controls:
+            reason = self._selected_refresh_unavailable_reason(source)
+            button.setEnabled(reason is None)
+            button.setToolTip(reason or enabled_tooltip)
 
     def _selected_refresh_succeeded(
         self,
@@ -1828,14 +2401,16 @@ class LibraryTab(QWidget):
         self.data_changed.emit()
 
         if source == "hltb" and getattr(game, "hltb_match_status", None) == "review":
-            self.selected_refresh_status.setText(
+            self._set_selected_refresh_status(
                 f"{source_labels[source]} refreshed for {game.name}; "
-                "the match needs review."
+                "the match needs review.",
+                "warning",
             )
             return
 
-        self.selected_refresh_status.setText(
-            f"{source_labels[source]} refreshed for {game.name}."
+        self._set_selected_refresh_status(
+            f"{source_labels[source]} refreshed for {game.name}.",
+            "positive",
         )
 
     def _selected_refresh_failed(
@@ -1852,7 +2427,10 @@ class LibraryTab(QWidget):
 
         label = source_labels.get(source, source)
 
-        self.selected_refresh_status.setText(f"{label} refresh failed for {game.name}.")
+        self._set_selected_refresh_status(
+            f"{label} refresh failed for {game.name}.",
+            "danger",
+        )
 
         QMessageBox.warning(
             self,
@@ -1890,7 +2468,7 @@ class LibraryTab(QWidget):
         self.rating_combo.blockSignals(False)
 
         self.steam_page_button.setEnabled(False)
-        self.selected_refresh_status.setText("")
+        self._set_selected_refresh_status("")
         self._set_detail_content_visible(False)
         self._update_selected_refresh_enabled()
 
@@ -1930,17 +2508,20 @@ class LibraryTab(QWidget):
 
     def _update_detail_typography(self):
         panel_width = self.details_panel.viewport().width()
-        wide = panel_width >= 560
-
-        title_size = 17 if wide else 15
-        detail_size = 12 if wide else 11
-        label_size = 11 if wide else 10
+        title_size = 17 if panel_width >= 560 else 15
 
         self.game_title.setStyleSheet(f"font-size: {title_size}pt; font-weight: bold;")
-        self.game_details.setStyleSheet(f"font-size: {detail_size}pt;")
-        self.status_label.setStyleSheet(f"font-size: {label_size}pt;")
-        self.status_value.setStyleSheet(f"font-size: {label_size}pt;")
-        self.rating_label.setStyleSheet(f"font-size: {label_size}pt;")
+
+        for label in (
+            self.game_description,
+            self.game_details,
+            self.status_label,
+            self.status_value,
+            self.rating_label,
+        ):
+            font = label.font()
+            font.setPointSize(11)
+            label.setFont(font)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1953,10 +2534,21 @@ class LibraryTab(QWidget):
         super().hideEvent(event)
 
     def sort_by_column(self, column):
-        if self.header_sort_column == column:
+        if column == 0:
+            if (
+                self.header_sort_column == column
+                and self.header_sort_order == Qt.SortOrder.AscendingOrder
+            ):
+                self.header_sort_order = Qt.SortOrder.DescendingOrder
+            else:
+                self.header_sort_column = column
+                self.header_sort_order = Qt.SortOrder.AscendingOrder
+
+        elif self.header_sort_column == column:
             if self.header_sort_order == Qt.SortOrder.AscendingOrder:
                 self.header_sort_order = Qt.SortOrder.DescendingOrder
             else:
+                self.header_sort_column = None
                 self.header_sort_order = Qt.SortOrder.AscendingOrder
 
         else:
@@ -1965,12 +2557,18 @@ class LibraryTab(QWidget):
 
         header = self.table.horizontalHeader()
 
-        header.setSortIndicatorShown(True)
-
-        header.setSortIndicator(
-            column,
-            self.header_sort_order,
-        )
+        if self.header_sort_column is None:
+            header.setSortIndicatorShown(False)
+            self.game_table_model.set_sort_column(None)
+        else:
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(
+                self.header_sort_column,
+                self.header_sort_order,
+            )
+            self.game_table_model.set_sort_column(
+                self.header_sort_column,
+            )
 
         self.apply_filters()
         self._save_library_view()
@@ -1979,6 +2577,7 @@ class LibraryTab(QWidget):
         self.header_sort_column = None
 
         self.table.horizontalHeader().setSortIndicatorShown(False)
+        self.game_table_model.set_sort_column(None)
 
         self.apply_filters()
 
@@ -2080,13 +2679,15 @@ class LibraryTab(QWidget):
         if column == 7:
             type_order = {
                 "Game": 0,
-                "Unknown (Game)": 1,
-                "Unknown": 2,
-                "Software": 3,
-                "Unknown (Software)": 4,
-                "DLC": 5,
-                "Video": 6,
-                "Hardware": 7,
+                "Test / Beta": 1,
+                "Unknown (Test / Beta)": 2,
+                "Unknown (Game)": 3,
+                "Unknown": 4,
+                "Software": 5,
+                "Unknown (Software)": 6,
+                "DLC": 7,
+                "Video": 8,
+                "Hardware": 9,
             }
 
             return sorted(

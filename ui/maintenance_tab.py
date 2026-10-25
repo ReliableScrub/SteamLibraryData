@@ -155,12 +155,7 @@ class MaintenanceTab(QWidget):
 
     def _create_layout(self):
         outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(
-            0,
-            0,
-            0,
-            0,
-        )
+        outer_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -168,216 +163,120 @@ class MaintenanceTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(14)
 
-        layout.setContentsMargins(
-            24,
-            20,
-            24,
-            24,
-        )
-
-        layout.setSpacing(10)
+        updates_card = QFrame()
+        updates_card.setProperty("card", True)
+        updates_card.setProperty("accentCard", True)
+        updates_layout = QVBoxLayout(updates_card)
+        updates_layout.setContentsMargins(18, 16, 18, 18)
+        updates_layout.setSpacing(10)
 
         updates_heading = QLabel("<h2>Data Updates</h2>")
-
         updates_description = QLabel(
             "Refresh library data and maintain locally stored metadata."
         )
         updates_description.setWordWrap(True)
 
-        layout.addWidget(updates_heading)
-        layout.addWidget(updates_description)
-        layout.addSpacing(6)
+        updates_layout.addWidget(updates_heading)
+        updates_layout.addWidget(updates_description)
+        updates_layout.addSpacing(4)
 
         updates_grid = QGridLayout()
         updates_grid.setHorizontalSpacing(16)
         updates_grid.setVerticalSpacing(10)
 
-        updates_grid.addWidget(
-            self.update_all_status,
-            0,
-            0,
-        )
-
-        updates_grid.addWidget(
-            self.update_all_progress,
-            0,
-            1,
-        )
+        updates_grid.addWidget(self.update_all_status, 0, 0)
+        updates_grid.addWidget(self.update_all_progress, 0, 1)
 
         update_all_buttons = QHBoxLayout()
         update_all_buttons.addWidget(self.update_all_button)
         update_all_buttons.addWidget(self.cancel_updates_button)
         update_all_buttons.addWidget(self.view_failures_button)
+        updates_grid.addLayout(update_all_buttons, 0, 2)
 
-        updates_grid.addLayout(
-            update_all_buttons,
-            0,
-            2,
-        )
+        updates_grid.addWidget(self.library_status, 1, 0)
+        updates_grid.addWidget(self.library_progress, 1, 1)
+        updates_grid.addWidget(self.library_button, 1, 2)
 
-        updates_grid.addWidget(
-            self.library_status,
-            1,
-            0,
-        )
+        updates_grid.addWidget(self.steam_classification_status, 2, 0)
+        updates_grid.addWidget(self.steam_classification_progress, 2, 1)
+        updates_grid.addWidget(self.steam_classification_button, 2, 2)
 
-        updates_grid.addWidget(
-            self.library_progress,
-            1,
-            1,
-        )
-
-        updates_grid.addWidget(
-            self.library_button,
-            1,
-            2,
-        )
-
-        updates_grid.addWidget(
-            self.steam_classification_status,
-            2,
-            0,
-        )
-
-        updates_grid.addWidget(
-            self.steam_classification_progress,
-            2,
-            1,
-        )
-
-        updates_grid.addWidget(
-            self.steam_classification_button,
-            2,
-            2,
-        )
-
-        updates_grid.addWidget(
-            self.hltb_status,
-            3,
-            0,
-        )
-
-        updates_grid.addWidget(
-            self.hltb_progress,
-            3,
-            1,
-        )
+        updates_grid.addWidget(self.hltb_status, 3, 0)
+        updates_grid.addWidget(self.hltb_progress, 3, 1)
 
         hltb_buttons = QHBoxLayout()
-
         hltb_buttons.addWidget(QLabel("Refresh oldest:"))
         hltb_buttons.addWidget(self.hltb_refresh_count)
         hltb_buttons.addWidget(self.hltb_refresh_button)
         hltb_buttons.addWidget(self.hltb_review_button)
+        updates_grid.addLayout(hltb_buttons, 3, 2)
 
-        updates_grid.addLayout(
-            hltb_buttons,
-            3,
-            2,
-        )
-
-        updates_grid.addWidget(
-            self.metadata_status,
-            4,
-            0,
-        )
-
-        updates_grid.addWidget(
-            self.metadata_progress,
-            4,
-            1,
-        )
+        updates_grid.addWidget(self.metadata_status, 4, 0)
+        updates_grid.addWidget(self.metadata_progress, 4, 1)
 
         metadata_buttons = QHBoxLayout()
         metadata_buttons.addWidget(QLabel("Refresh oldest:"))
         metadata_buttons.addWidget(self.metadata_refresh_count)
         metadata_buttons.addWidget(self.metadata_refresh_button)
+        updates_grid.addLayout(metadata_buttons, 4, 2)
 
-        updates_grid.addLayout(
-            metadata_buttons,
-            4,
-            2,
-        )
-
-        updates_grid.addWidget(
-            self.achievement_status,
-            5,
-            0,
-        )
-
-        updates_grid.addWidget(
-            self.achievement_progress,
-            5,
-            1,
-        )
+        updates_grid.addWidget(self.achievement_status, 5, 0)
+        updates_grid.addWidget(self.achievement_progress, 5, 1)
 
         achievement_buttons = QHBoxLayout()
         achievement_buttons.addWidget(self.achievement_refresh_button)
+        updates_grid.addLayout(achievement_buttons, 5, 2)
 
-        updates_grid.addLayout(
-            achievement_buttons,
-            5,
-            2,
-        )
+        updates_grid.setColumnStretch(0, 1)
+        updates_grid.setColumnStretch(1, 1)
+        updates_grid.setColumnStretch(2, 1)
 
-        updates_grid.setColumnStretch(
-            0,
-            1,
-        )
+        updates_layout.addLayout(updates_grid)
+        layout.addWidget(updates_card)
 
-        updates_grid.setColumnStretch(
-            1,
-            1,
-        )
+        account_card = QFrame()
+        account_card.setProperty("card", True)
+        account_layout = QVBoxLayout(account_card)
+        account_layout.setContentsMargins(18, 16, 18, 18)
+        account_layout.setSpacing(10)
 
-        updates_grid.setColumnStretch(
-            2,
-            1,
-        )
+        account_layout.addWidget(QLabel("<h2>Steam Account</h2>"))
+        account_layout.addWidget(self.account_label)
+        account_layout.addWidget(self.change_steam_id_button)
+        account_layout.addSpacing(4)
+        account_layout.addWidget(QLabel("<b>Steam Web API</b>"))
+        account_layout.addWidget(self.api_key_label)
+        account_layout.addWidget(self.change_api_key_button)
+        account_layout.addWidget(self.remove_api_key_button)
+        layout.addWidget(account_card)
 
-        layout.addLayout(updates_grid)
+        application_card = QFrame()
+        application_card.setProperty("card", True)
+        application_layout = QVBoxLayout(application_card)
+        application_layout.setContentsMargins(18, 16, 18, 18)
+        application_layout.setSpacing(10)
 
-        layout.addSpacing(24)
-
-        account_heading = QLabel("<h2>Steam Account</h2>")
-
-        layout.addWidget(account_heading)
-        layout.addWidget(self.account_label)
-        layout.addWidget(self.change_steam_id_button)
-
-        layout.addSpacing(12)
-
-        layout.addWidget(QLabel("<b>Steam Web API</b>"))
-
-        layout.addWidget(self.api_key_label)
-
-        layout.addWidget(self.change_api_key_button)
-        layout.addWidget(self.remove_api_key_button)
-
-        layout.addSpacing(24)
-
-        application_heading = QLabel("<h2>Application</h2>")
-
-        layout.addWidget(application_heading)
+        application_layout.addWidget(QLabel("<h2>Application</h2>"))
 
         appearance_row = QHBoxLayout()
-
         appearance_row.addWidget(QLabel("Appearance:"))
-
         appearance_row.addWidget(self.appearance_combo)
-
         appearance_row.addStretch()
+        application_layout.addLayout(appearance_row)
+        application_layout.addWidget(self.clear_images_button)
+        layout.addWidget(application_card)
 
-        layout.addLayout(appearance_row)
+        danger_card = QFrame()
+        danger_card.setProperty("card", True)
+        danger_card.setProperty("dangerCard", True)
+        danger_layout = QVBoxLayout(danger_card)
+        danger_layout.setContentsMargins(18, 16, 18, 18)
+        danger_layout.setSpacing(10)
 
-        layout.addSpacing(8)
-
-        layout.addWidget(self.clear_images_button)
-
-        layout.addSpacing(24)
-
-        danger_heading = QLabel("<h2>Danger Zone</h2>")
+        danger_layout.addWidget(QLabel("<h2>Danger Zone</h2>"))
 
         danger_description = QLabel(
             "Resetting the local database deletes "
@@ -385,14 +284,11 @@ class MaintenanceTab(QWidget):
             "achievement, rating, and recommendation "
             "data stored by the application."
         )
-
         danger_description.setWordWrap(True)
 
-        layout.addWidget(danger_heading)
-
-        layout.addWidget(danger_description)
-
-        layout.addWidget(self.reset_database_button)
+        danger_layout.addWidget(danger_description)
+        danger_layout.addWidget(self.reset_database_button)
+        layout.addWidget(danger_card)
 
         layout.addStretch()
 

@@ -1,3 +1,5 @@
+import time
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -55,6 +57,8 @@ class _SearchableCheckList(QWidget):
         self._available = []
         self._selected = set()
         self._syncing = False
+        self._last_check_change_text = None
+        self._last_check_change_at = 0.0
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search...")
@@ -63,6 +67,7 @@ class _SearchableCheckList(QWidget):
         self.list_widget.setUniformItemSizes(False)
         self.list_widget.setItemDelegate(_CheckListItemDelegate(self.list_widget))
         self.list_widget.itemChanged.connect(self._item_changed)
+        self.list_widget.itemDoubleClicked.connect(self._item_double_clicked)
         self.search_box.textChanged.connect(self._apply_search)
 
         layout = QVBoxLayout(self)
@@ -128,7 +133,23 @@ class _SearchableCheckList(QWidget):
         else:
             self._selected.discard(item.text())
 
+        self._last_check_change_text = item.text()
+        self._last_check_change_at = time.monotonic()
         self.selection_changed.emit()
+
+    def _item_double_clicked(self, item):
+        recently_changed = (
+            self._last_check_change_text == item.text()
+            and time.monotonic() - self._last_check_change_at < 0.35
+        )
+
+        if recently_changed:
+            return
+
+        checked = item.checkState() == Qt.CheckState.Checked
+        item.setCheckState(
+            Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked
+        )
 
 
 class GenreTagFilterWidget(QWidget):
@@ -186,6 +207,40 @@ class GenreTagFilterWidget(QWidget):
         self._selected_game_genres.clear()
         self._selected_software_genres.clear()
         self._selected_tags.clear()
+        self._update_button_text()
+        self.filters_changed.emit()
+
+    @staticmethod
+    def _safe_saved_values(values):
+        if not isinstance(values, (list, tuple, set, frozenset)):
+            return set()
+
+        return {value for value in values if isinstance(value, str)}
+
+    def set_selected_filters(self, game_genres=(), software_genres=(), tags=()):
+        game_genres = self._safe_saved_values(game_genres)
+        software_genres = self._safe_saved_values(software_genres)
+        tags = self._safe_saved_values(tags)
+
+        self._selected_game_genres = game_genres & set(self._available_game_genres)
+        self._selected_software_genres = software_genres & set(
+            self._available_software_genres
+        )
+        self._selected_tags = tags & set(self._available_tags)
+        self._update_button_text()
+
+    def remove_filter(self, category, value):
+        targets = {
+            "game_genre": self._selected_game_genres,
+            "software_genre": self._selected_software_genres,
+            "tag": self._selected_tags,
+        }
+        target = targets.get(category)
+
+        if target is None or value not in target:
+            return
+
+        target.remove(value)
         self._update_button_text()
         self.filters_changed.emit()
 
@@ -312,6 +367,11 @@ class GenreTagFilterWidget(QWidget):
         self._update_button_text()
 
     def inferred_steam_type(self, game):
+        is_test_build = getattr(game, "is_test_build", None)
+
+        if callable(is_test_build) and is_test_build():
+            return "test"
+
         raw_type = getattr(game, "steam_type", "unknown") or "unknown"
 
         if raw_type != "unknown":
@@ -341,10 +401,15 @@ class GenreTagFilterWidget(QWidget):
 
     def display_steam_type(self, game):
         raw_type = getattr(game, "steam_type", "unknown") or "unknown"
+        inferred = self.inferred_steam_type(game)
+
+        if inferred == "test":
+            if raw_type == "unknown":
+                return "Unknown (Test / Beta)"
+
+            return "Test / Beta"
 
         if raw_type == "unknown":
-            inferred = self.inferred_steam_type(game)
-
             if inferred == "game":
                 return "Unknown (Game)"
 
@@ -373,6 +438,12 @@ class GenreTagFilterWidget(QWidget):
         if selected_type == "Game":
             return inferred_type == "game"
 
+        if selected_type == "Test / Beta":
+            return raw_type != "unknown" and inferred_type == "test"
+
+        if selected_type == "Unknown (Test / Beta)":
+            return raw_type == "unknown" and inferred_type == "test"
+
         if selected_type == "Unknown (Game)":
             return raw_type == "unknown" and inferred_type == "game"
 
@@ -400,6 +471,7 @@ class GenreTagFilterWidget(QWidget):
 
     def is_backlog_eligible(self, game):
         return self.inferred_steam_type(game) not in {
+            "test",
             "software",
             "dlc",
             "video",

@@ -1,4 +1,48 @@
+import re
 from dataclasses import dataclass, field
+
+TEST_BUILD_PHRASES = (
+    "public test",
+    "public testing",
+    "test server",
+    "test client",
+    "test realm",
+    "test environment",
+    "test build",
+    "testing beta",
+    "beta testing",
+    "testing alpha",
+    "alpha testing",
+    "public beta",
+    "public alpha",
+    "open beta",
+    "closed beta",
+    "open alpha",
+    "closed alpha",
+    "beta test",
+    "beta server",
+    "beta client",
+    "beta build",
+    "alpha test",
+    "alpha server",
+    "alpha client",
+    "alpha build",
+    "technical test",
+    "technical beta",
+    "technical alpha",
+    "playtest",
+    "play test",
+)
+
+
+def normalize_test_build_title(title):
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        (title or "").casefold(),
+    )
+
+    return " ".join(normalized.split())
 
 
 @dataclass
@@ -44,6 +88,20 @@ class Game:
     achievements_playtime_minutes: int | None = None
 
     manual_status: str | None = None
+
+    def is_test_build(self):
+        normalized_name = normalize_test_build_title(self.name)
+
+        if any(phrase in normalized_name for phrase in TEST_BUILD_PHRASES):
+            return True
+
+        # Some legacy/test Steam entries are only identifiable by a trailing
+        # "Beta" in the title. Restrict this heuristic to unknown Steam types
+        # so normal released games are not reclassified by name alone.
+        if self.steam_type == "unknown" and normalized_name.endswith(" beta"):
+            return True
+
+        return False
 
     def hltb_time(self, metric):
         if metric == "Main Story":
@@ -117,6 +175,9 @@ class Game:
         return "Inactive"
 
     def is_backlog_eligible(self):
+        if self.is_test_build():
+            return False
+
         return self.steam_type not in {
             "software",
             "dlc",

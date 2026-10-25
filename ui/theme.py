@@ -258,9 +258,12 @@ QTreeView::item:selected {
     color: @TEXT@;
 }
 
-QHeaderView::section {
+QHeaderView {
     color: @TEXT@;
     background-color: @SURFACE_ALT@;
+}
+
+QHeaderView::section {
     border: none;
     border-right: 1px solid @BORDER@;
     border-bottom: 1px solid @BORDER@;
@@ -472,7 +475,7 @@ QFrame[statTile="true"] {
 
 QLabel[statLabel="true"] {
     color: @MUTED@;
-    font-size: 9pt;
+    font-size: 10pt;
     font-weight: 600;
 }
 
@@ -493,7 +496,7 @@ QLabel[sectionHeading="true"] {
 
 QLabel[emptyState="true"] {
     color: @MUTED@;
-    font-size: 12pt;
+    font-size: 11pt;
     font-weight: 600;
 }
 
@@ -533,10 +536,64 @@ QLabel[status="danger"] {
     font-weight: 600;
 }
 
+QLabel[status="accent"] {
+    color: @ACCENT_HOVER@;
+    font-weight: 600;
+}
+
+QFrame[summaryStrip="true"] {
+    background-color: @SURFACE_ALT@;
+    border: 1px solid @BORDER@;
+    border-left: 3px solid @ACCENT@;
+    border-radius: 7px;
+}
+
+QLabel[summaryText="true"] {
+    color: @TEXT@;
+    font-weight: 600;
+}
+
+QPushButton[filterChip="true"] {
+    color: @ACCENT_HOVER@;
+    background-color: @ACCENT_SOFT@;
+    border-color: @ACCENT@;
+    border-radius: 11px;
+    padding: 3px 8px;
+    min-height: 18px;
+}
+
+QPushButton[filterChip="true"]:hover {
+    color: @TEXT@;
+    background-color: @SURFACE_HOVER@;
+    border-color: @ACCENT_HOVER@;
+}
+
+QFrame[noResults="true"] {
+    background-color: @SURFACE_ALT@;
+    border: 1px solid @WARNING@;
+    border-radius: 7px;
+}
+
+QWidget[accentCard="true"],
+QFrame[accentCard="true"] {
+    background-color: @SURFACE@;
+    border: 1px solid @BORDER@;
+    border-left: 3px solid @ACCENT@;
+    border-radius: 8px;
+}
+
 QFrame[card="true"] {
     background-color: @SURFACE@;
     border: 1px solid @BORDER@;
     border-radius: 8px;
+}
+
+QFrame[card="true"][accentCard="true"] {
+    border-left: 3px solid @ACCENT@;
+}
+
+QFrame[card="true"][dangerCard="true"] {
+    border-left: 3px solid @DANGER@;
 }
 """
 
@@ -574,6 +631,10 @@ def apply_theme(
     system_style_name: str,
     system_palette: QPalette,
 ):
+    app_font = app.font()
+    app_font.setPointSize(11)
+    app.setFont(app_font)
+
     if appearance == "System":
         app.setStyleSheet("")
         system_style = QStyleFactory.create(system_style_name)
