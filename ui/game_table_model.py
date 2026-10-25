@@ -26,6 +26,7 @@ class GameTableModel(QAbstractTableModel):
         self.ratings = {}
         self.hltb_metric = "Main Story"
         self.sort_column = None
+        self.header_font_point_size = None
 
     def rowCount(self, parent=None):
         return len(self.games)
@@ -150,6 +151,10 @@ class GameTableModel(QAbstractTableModel):
 
                 if role == Qt.ItemDataRole.FontRole:
                     font = QFont(QApplication.font())
+
+                    if self.header_font_point_size is not None:
+                        font.setPointSize(self.header_font_point_size)
+
                     font.setBold(True)
                     return font
 
@@ -226,6 +231,17 @@ class GameTableModel(QAbstractTableModel):
                 len(self.games) - 1,
                 4,
             ),
+        )
+
+    def set_header_font_point_size(self, point_size):
+        if point_size == self.header_font_point_size:
+            return
+
+        self.header_font_point_size = point_size
+        self.headerDataChanged.emit(
+            Qt.Orientation.Horizontal,
+            0,
+            self.columnCount() - 1,
         )
 
     def set_steam_type_resolver(self, resolver):

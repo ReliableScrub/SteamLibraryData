@@ -4,52 +4,90 @@ import pytest
 import requests
 
 from api import steam_api
+from game import Game
 from recommendations.data import load_recommendation_games
 from storage import database
 
 
-def make_response(data, status_code=200):
+def make_response(
+    data,
+    status_code=200,
+):
     response = requests.Response()
     response.status_code = status_code
     response._content = json.dumps(data).encode("utf-8")
     response.encoding = "utf-8"
     response.headers["Content-Type"] = "application/json"
     response.url = "https://api.steampowered.com/test"
+
     return response
 
 
-def request_contains_value(request, expected_value):
+def request_contains_value(
+    request,
+    expected_value,
+):
     params = request.get("params") or {}
     headers = request.get("headers") or {}
     values = list(params.values()) + list(headers.values())
+
     return any(expected_value in str(value) for value in values)
 
 
 def test_rating_crud(temporary_database):
-    database.set_game_rating(123, 5)
+    database.set_game_rating(
+        123,
+        5,
+    )
     assert database.get_game_rating(123) == 5
 
-    database.set_game_rating(123, 4)
+    database.set_game_rating(
+        123,
+        4,
+    )
     assert database.get_game_rating(123) == 4
 
     database.clear_game_rating(123)
+
     assert database.get_game_rating(123) is None
 
 
-@pytest.mark.parametrize("rating", [0, 6, -1])
-def test_rating_rejects_invalid_values(temporary_database, rating):
+@pytest.mark.parametrize(
+    "rating",
+    [
+        0,
+        6,
+        -1,
+    ],
+)
+def test_rating_rejects_invalid_values(
+    temporary_database,
+    rating,
+):
     with pytest.raises(ValueError):
-        database.set_game_rating(123, rating)
+        database.set_game_rating(
+            123,
+            rating,
+        )
 
 
-def test_rating_survives_library_game_deletion(temporary_database):
+def test_rating_survives_library_game_deletion(
+    temporary_database,
+):
     with database.get_connection() as connection:
         connection.execute(
             "INSERT INTO games (app_id, name) VALUES (?, ?)",
-            (123, "Test Game"),
+            (
+                123,
+                "Test Game",
+            ),
         )
 
-    database.set_game_rating(123, 5)
+    database.set_game_rating(
+        123,
+        5,
+    )
+
     database.delete_games_not_in([])
 
     with database.get_connection() as connection:
@@ -62,7 +100,9 @@ def test_rating_survives_library_game_deletion(temporary_database):
     assert database.get_game_rating(123) == 5
 
 
-def test_recommendation_data_loads_metadata_and_rating(temporary_database):
+def test_recommendation_data_loads_metadata_and_rating(
+    temporary_database,
+):
     with database.get_connection() as connection:
         connection.execute(
             """
@@ -75,39 +115,61 @@ def test_recommendation_data_loads_metadata_and_rating(temporary_database):
             )
             VALUES (?, ?, ?, ?, ?)
             """,
-            (123, "Test RPG", "game", 600, 1),
+            (
+                123,
+                "Test RPG",
+                "game",
+                600,
+                1,
+            ),
         )
+
         connection.execute(
             "INSERT INTO genres (name) VALUES (?)",
             ("RPG",),
         )
+
         genre_id = connection.execute(
             "SELECT genre_id FROM genres WHERE name = ?",
             ("RPG",),
         ).fetchone()[0]
+
         connection.execute(
             "INSERT INTO game_genres (app_id, genre_id) VALUES (?, ?)",
-            (123, genre_id),
+            (
+                123,
+                genre_id,
+            ),
         )
 
         connection.execute(
             "INSERT INTO tags (name) VALUES (?)",
             ("Story Rich",),
         )
+
         tag_id = connection.execute(
             "SELECT tag_id FROM tags WHERE name = ?",
             ("Story Rich",),
         ).fetchone()[0]
+
         connection.execute(
             "INSERT INTO game_tags (app_id, tag_id, weight) VALUES (?, ?, ?)",
-            (123, tag_id, 250),
+            (
+                123,
+                tag_id,
+                250,
+            ),
         )
 
-    database.set_game_rating(123, 5)
+    database.set_game_rating(
+        123,
+        5,
+    )
 
     games = load_recommendation_games()
 
     assert len(games) == 1
+
     game = games[0]
 
     assert game.app_id == 123
@@ -118,10 +180,17 @@ def test_recommendation_data_loads_metadata_and_rating(temporary_database):
     assert game.tags == {"Story Rich": 250}
 
 
-def test_get_owned_games_requests_and_parses_library(monkeypatch):
+def test_get_owned_games_requests_and_parses_library(
+    monkeypatch,
+):
     request = {}
 
-    def fake_get(url, params=None, headers=None, **kwargs):
+    def fake_get(
+        url,
+        params=None,
+        headers=None,
+        **kwargs,
+    ):
         request["url"] = url
         request["params"] = params or {}
         request["headers"] = headers or {}
@@ -149,15 +218,26 @@ def test_get_owned_games_requests_and_parses_library(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(steam_api.requests, "get", fake_get)
+    monkeypatch.setattr(
+        steam_api.requests,
+        "get",
+        fake_get,
+    )
 
-    games = steam_api.get_owned_games("0", "fake_api_key")
+    games = steam_api.get_owned_games(
+        "0",
+        "fake_api_key",
+    )
 
     assert request["url"] == (
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
     )
+
     assert request["params"]["steamid"] == "0"
-    assert request_contains_value(request, "fake_api_key")
+    assert request_contains_value(
+        request,
+        "fake_api_key",
+    )
     assert request["params"]["include_appinfo"] is True
     assert request["params"]["include_played_free_games"] is True
 
@@ -176,8 +256,15 @@ def test_get_owned_games_requests_and_parses_library(monkeypatch):
     assert games[1].last_played_timestamp == 0
 
 
-def test_get_owned_games_handles_empty_library(monkeypatch):
-    def fake_get(url, params=None, headers=None, **kwargs):
+def test_get_owned_games_handles_empty_library(
+    monkeypatch,
+):
+    def fake_get(
+        url,
+        params=None,
+        headers=None,
+        **kwargs,
+    ):
         return make_response(
             {
                 "response": {
@@ -187,6 +274,106 @@ def test_get_owned_games_handles_empty_library(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(steam_api.requests, "get", fake_get)
+    monkeypatch.setattr(
+        steam_api.requests,
+        "get",
+        fake_get,
+    )
 
-    assert steam_api.get_owned_games("0", "fake_api_key") == []
+    assert (
+        steam_api.get_owned_games(
+            "0",
+            "fake_api_key",
+        )
+        == []
+    )
+
+
+def test_game_round_trip_preserves_persisted_fields(
+    temporary_database,
+):
+    assert temporary_database.exists()
+
+    original = Game(
+        app_id=123,
+        name="Round Trip Test",
+        playtime_minutes=720,
+        playtime_2weeks_minutes=45,
+        last_played_timestamp=1_700_000_000,
+        steam_type="game",
+        classification_updated_at=1_700_000_001,
+        genres=[
+            "RPG",
+            "Adventure",
+        ],
+        tags={
+            "Story Rich": 250,
+            "Fantasy": 180,
+        },
+        metadata_checked=True,
+        metadata_updated_at=1_700_000_002,
+        steamspy_positive=900,
+        steamspy_negative=100,
+        hltb_main=10.5,
+        hltb_main_extra=15.0,
+        hltb_completionist=24.0,
+        hltb_all_styles=17.5,
+        hltb_match_name="Round Trip Test",
+        hltb_similarity=0.97,
+        hltb_game_id=456,
+        hltb_web_link="https://example.invalid/game/456",
+        hltb_match_status="matched",
+        hltb_checked=True,
+        hltb_updated_at=1_700_000_003,
+        achievement_total=50,
+        achievements_unlocked=20,
+        achievements_checked=True,
+        achievements_updated_at=1_700_000_004,
+        achievements_playtime_minutes=700,
+        manual_status="On Hold",
+    )
+
+    database.save_game(original)
+
+    loaded_games = database.load_games()
+
+    assert len(loaded_games) == 1
+
+    loaded = loaded_games[0]
+
+    scalar_fields = [
+        "app_id",
+        "name",
+        "playtime_minutes",
+        "playtime_2weeks_minutes",
+        "last_played_timestamp",
+        "steam_type",
+        "classification_updated_at",
+        "metadata_checked",
+        "metadata_updated_at",
+        "steamspy_positive",
+        "steamspy_negative",
+        "hltb_main",
+        "hltb_main_extra",
+        "hltb_completionist",
+        "hltb_all_styles",
+        "hltb_match_name",
+        "hltb_similarity",
+        "hltb_game_id",
+        "hltb_web_link",
+        "hltb_match_status",
+        "hltb_checked",
+        "hltb_updated_at",
+        "achievement_total",
+        "achievements_unlocked",
+        "achievements_checked",
+        "achievements_updated_at",
+        "achievements_playtime_minutes",
+        "manual_status",
+    ]
+
+    for field_name in scalar_fields:
+        assert getattr(loaded, field_name) == getattr(original, field_name)
+
+    assert set(loaded.genres) == set(original.genres)
+    assert loaded.tags == original.tags

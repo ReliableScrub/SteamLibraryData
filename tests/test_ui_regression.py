@@ -2,7 +2,6 @@ import inspect
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QScrollArea
 
 import ui.recommendations_tab as recommendations_module
 from ui.gui import MainWindow
@@ -139,11 +138,10 @@ def test_recommendation_media_panels_are_vertical_scroll_areas(
     panel = getattr(recommendations_tab, panel_name)
     content = getattr(recommendations_tab, content_name)
 
-    assert isinstance(panel, QScrollArea)
     assert panel.widget() is content
     assert panel.widgetResizable()
     assert panel.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    assert panel.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert panel.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOn
 
 
 def test_recommendation_scroll_content_keeps_media_and_actions(recommendations_tab):

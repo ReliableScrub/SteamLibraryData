@@ -52,6 +52,34 @@ from ui.semantic_widgets import BadgeLabel, SectionHeading, SelectAllDoubleSpinB
 from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 
+LIBRARY_DISPLAY_PRESETS = {
+    "Compact": {
+        "table_font": 11,
+        "header_font": 11,
+        "row_height": 30,
+        "detail_font": 11,
+        "title_narrow": 15,
+        "title_wide": 17,
+    },
+    "Normal": {
+        "table_font": 12,
+        "header_font": 12,
+        "row_height": 36,
+        "detail_font": 12,
+        "title_narrow": 16,
+        "title_wide": 18,
+    },
+    "Large": {
+        "table_font": 14,
+        "header_font": 13,
+        "row_height": 46,
+        "detail_font": 14,
+        "title_narrow": 18,
+        "title_wide": 20,
+    },
+}
+DEFAULT_LIBRARY_DISPLAY_SIZE = "Normal"
+
 
 class SelectedGameRefreshSignals(QObject):
     result_ready = Signal(str, object, object)
@@ -296,6 +324,14 @@ class LibraryTab(QWidget):
         )
 
         self.pick_button = QPushButton("Pick Something For Me")
+
+        self.display_size_combo = QComboBox()
+        self.display_size_combo.addItems(list(LIBRARY_DISPLAY_PRESETS))
+        self.display_size_combo.setCurrentText(DEFAULT_LIBRARY_DISPLAY_SIZE)
+        self.display_size_combo.setToolTip(
+            "Adjust Library table rows and selected-game text for readability."
+        )
+
         self.clear_filters_button = QPushButton("Clear Filters")
         self.clear_filters_button.setToolTip(
             "Clear search, standard filters, Genre / Tags, and Advanced Filters."
@@ -484,7 +520,6 @@ class LibraryTab(QWidget):
 
         self.game_details = QLabel("")
         self.game_details.setWordWrap(True)
-        self.game_details.setStyleSheet("font-size: 11pt;")
         self.game_details.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -522,6 +557,9 @@ class LibraryTab(QWidget):
         search_row = QHBoxLayout()
         search_row.addWidget(self.search_box, 1)
         search_row.addWidget(self.pick_button)
+        search_row.addSpacing(8)
+        search_row.addWidget(QLabel("Display:"))
+        search_row.addWidget(self.display_size_combo)
 
         primary_filter_row = QHBoxLayout()
         primary_filter_row.addWidget(QLabel("Status:"))
@@ -705,6 +743,9 @@ class LibraryTab(QWidget):
 
     def _connect_signals(self):
         self.search_box.textChanged.connect(self._search_changed)
+        self.display_size_combo.currentTextChanged.connect(
+            self._library_display_size_changed
+        )
 
         self.status_filter.currentTextChanged.connect(self._library_filter_changed)
         self.type_filter.currentTextChanged.connect(self._library_filter_changed)
@@ -863,6 +904,13 @@ class LibraryTab(QWidget):
     def _restore_library_view(self):
         settings = get_library_view_settings()
 
+        display_size = settings.get("display_size", DEFAULT_LIBRARY_DISPLAY_SIZE)
+
+        if display_size not in LIBRARY_DISPLAY_PRESETS:
+            display_size = DEFAULT_LIBRARY_DISPLAY_SIZE
+
+        self.display_size_combo.setCurrentText(display_size)
+
         combo_settings = [
             (self.status_filter, settings.get("status")),
             (self.type_filter, settings.get("type")),
@@ -958,6 +1006,7 @@ class LibraryTab(QWidget):
             )
 
         self._update_advanced_filter_controls()
+        self._apply_library_display_size()
 
         sort_column = settings.get("sort_column")
 
@@ -992,6 +1041,7 @@ class LibraryTab(QWidget):
     def _save_library_view(self):
         set_library_view_settings(
             {
+                "display_size": self.display_size_combo.currentText(),
                 "search": self.search_box.text(),
                 "status": self.status_filter.currentText(),
                 "type": self.type_filter.currentText(),
@@ -1029,6 +1079,37 @@ class LibraryTab(QWidget):
                 "splitter_sizes": self.splitter.sizes(),
             }
         )
+
+    def _library_display_size_changed(self, *_):
+        self._apply_library_display_size()
+        self._save_library_view()
+
+    def _apply_library_display_size(self):
+        display_size = self.display_size_combo.currentText()
+        preset = LIBRARY_DISPLAY_PRESETS.get(
+            display_size,
+            LIBRARY_DISPLAY_PRESETS[DEFAULT_LIBRARY_DISPLAY_SIZE],
+        )
+
+        library_font = self.font()
+        library_font.setPointSize(preset["detail_font"])
+        self.setFont(library_font)
+
+        table_font = self.table.font()
+        table_font.setPointSize(preset["table_font"])
+        self.table.setFont(table_font)
+
+        header = self.table.horizontalHeader()
+        header_font = header.font()
+        header_font.setPointSize(preset["header_font"])
+        header.setFont(header_font)
+        self.game_table_model.set_header_font_point_size(preset["header_font"])
+
+        vertical_header = self.table.verticalHeader()
+        vertical_header.setMinimumSectionSize(preset["row_height"])
+        vertical_header.setDefaultSectionSize(preset["row_height"])
+
+        self.update_media_sizes()
 
     def _focus_search(self):
         self.search_box.setFocus()
@@ -2470,10 +2551,21 @@ class LibraryTab(QWidget):
         self._update_detail_typography()
 
     def _update_detail_typography(self):
+        display_size = self.display_size_combo.currentText()
+        preset = LIBRARY_DISPLAY_PRESETS.get(
+            display_size,
+            LIBRARY_DISPLAY_PRESETS[DEFAULT_LIBRARY_DISPLAY_SIZE],
+        )
         panel_width = self.details_panel.viewport().width()
-        title_size = 17 if panel_width >= 560 else 15
+        title_size = (
+            preset["title_wide"] if panel_width >= 560 else preset["title_narrow"]
+        )
 
         self.game_title.setStyleSheet(f"font-size: {title_size}pt; font-weight: bold;")
+
+        heading_size = max(preset["detail_font"], 11)
+        self.about_heading.setStyleSheet(f"font-size: {heading_size}pt;")
+        self.details_heading.setStyleSheet(f"font-size: {heading_size}pt;")
 
         for label in (
             self.game_description,
@@ -2481,10 +2573,24 @@ class LibraryTab(QWidget):
             self.status_label,
             self.status_value,
             self.rating_label,
+            self.refresh_selected_label,
+            self.selected_refresh_status,
         ):
             font = label.font()
-            font.setPointSize(11)
+            font.setPointSize(preset["detail_font"])
             label.setFont(font)
+
+        for control in (
+            self.manual_status_combo,
+            self.rating_combo,
+            self.refresh_hltb_button,
+            self.refresh_metadata_button,
+            self.refresh_achievements_button,
+            self.steam_page_button,
+        ):
+            font = control.font()
+            font.setPointSize(preset["detail_font"])
+            control.setFont(font)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

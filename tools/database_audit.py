@@ -4,6 +4,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from storage.paths import DB_FILE
 
 VALID_STEAM_TYPES = {
@@ -50,9 +54,7 @@ def table_names(connection):
 
 
 def table_columns(connection, table):
-    rows = connection.execute(
-        f"PRAGMA table_info({table})"
-    ).fetchall()
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
 
     return {row["name"] for row in rows}
 
@@ -74,8 +76,10 @@ def format_timestamp(value):
         return "n/a"
 
     try:
-        return datetime.fromtimestamp(int(value)).astimezone().strftime(
-            "%Y-%m-%d %H:%M:%S %Z"
+        return (
+            datetime.fromtimestamp(int(value))
+            .astimezone()
+            .strftime("%Y-%m-%d %H:%M:%S %Z")
         )
     except (OSError, OverflowError, TypeError, ValueError):
         return f"invalid ({value!r})"
@@ -107,7 +111,11 @@ def timestamp_candidates(connection, source):
             if source not in lower:
                 continue
 
-            if "updated" not in lower and "checked" not in lower and "refresh" not in lower:
+            if (
+                "updated" not in lower
+                and "checked" not in lower
+                and "refresh" not in lower
+            ):
                 continue
 
             if not lower.endswith("_at") and "timestamp" not in lower:
@@ -166,15 +174,13 @@ def audit_database(database_path):
     try:
         tables = table_names(connection)
 
-        print("Steam Backlog DB - Phase 5 Regression Audit")
-        print("=" * 51)
+        print("Steam Backlog DB - Database Audit")
+        print("=" * 33)
         print(f"Database: {database_path.expanduser().resolve()}")
 
         print_heading("SQLite integrity")
 
-        integrity_rows = connection.execute(
-            "PRAGMA integrity_check"
-        ).fetchall()
+        integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
 
         integrity_messages = [row[0] for row in integrity_rows]
 
@@ -183,13 +189,10 @@ def audit_database(database_path):
         else:
             print_value("Integrity check", "FAIL")
             errors.extend(
-                f"SQLite integrity: {message}"
-                for message in integrity_messages
+                f"SQLite integrity: {message}" for message in integrity_messages
             )
 
-        foreign_key_rows = connection.execute(
-            "PRAGMA foreign_key_check"
-        ).fetchall()
+        foreign_key_rows = connection.execute("PRAGMA foreign_key_check").fetchall()
 
         print_count(
             "Foreign-key violations",
@@ -197,9 +200,7 @@ def audit_database(database_path):
         )
 
         if foreign_key_rows:
-            errors.append(
-                f"{len(foreign_key_rows)} foreign-key violation(s)"
-            )
+            errors.append(f"{len(foreign_key_rows)} foreign-key violation(s)")
 
         required_tables = {
             "games",
@@ -216,10 +217,7 @@ def audit_database(database_path):
         missing_tables = sorted(required_tables - tables)
 
         if missing_tables:
-            errors.append(
-                "Missing expected table(s): "
-                + ", ".join(missing_tables)
-            )
+            errors.append("Missing expected table(s): " + ", ".join(missing_tables))
 
         if "games" not in tables:
             print()
@@ -233,10 +231,13 @@ def audit_database(database_path):
 
         print_heading("Library")
 
-        total_games = scalar(
-            connection,
-            "SELECT COUNT(*) FROM games",
-        ) or 0
+        total_games = (
+            scalar(
+                connection,
+                "SELECT COUNT(*) FROM games",
+            )
+            or 0
+        )
 
         print_count(
             "Library entries",
@@ -253,8 +254,7 @@ def audit_database(database_path):
         ).fetchall()
 
         classification_counts = {
-            row["steam_type"]: row["count"]
-            for row in classification_rows
+            row["steam_type"]: row["count"] for row in classification_rows
         }
 
         for steam_type in (
@@ -283,14 +283,17 @@ def audit_database(database_path):
             )
 
         if "classification_updated_at" in game_columns:
-            classified = scalar(
-                connection,
-                """
+            classified = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games
                 WHERE classification_updated_at IS NOT NULL
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Classification checked",
@@ -304,6 +307,52 @@ def audit_database(database_path):
             if total_games and classified < total_games:
                 warnings.append(
                     f"{total_games - classified} library entries have no classification timestamp"
+                )
+
+        if "playtime_minutes" in game_columns:
+            print_count(
+                "Never played",
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM games WHERE playtime_minutes = 0",
+                )
+                or 0,
+            )
+            print_count(
+                "Played at least once",
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM games WHERE playtime_minutes > 0",
+                )
+                or 0,
+            )
+            print_count(
+                "Played 50+ hours",
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM games WHERE playtime_minutes >= 3000",
+                )
+                or 0,
+            )
+
+        if "manual_status" in game_columns:
+            print_heading("Manual status")
+
+            status_rows = connection.execute(
+                """
+                SELECT
+                    COALESCE(manual_status, '<NULL>') AS status,
+                    COUNT(*) AS count
+                FROM games
+                GROUP BY manual_status
+                ORDER BY count DESC, status
+                """
+            ).fetchall()
+
+            for row in status_rows:
+                print_count(
+                    row["status"],
+                    row["count"],
                 )
 
         print_heading("Maintenance coverage")
@@ -320,19 +369,20 @@ def audit_database(database_path):
                     label,
                     "Column not present",
                 )
-                warnings.append(
-                    f"games.{column} is not present"
-                )
+                warnings.append(f"games.{column} is not present")
                 continue
 
-            checked = scalar(
-                connection,
-                f"""
+            checked = (
+                scalar(
+                    connection,
+                    f"""
                 SELECT COUNT(*)
                 FROM games
                 WHERE {column} = 1
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_value(
                 label,
@@ -386,45 +436,52 @@ def audit_database(database_path):
                     row["count"],
                 )
 
-            pending_hltb = scalar(
-                connection,
-                """
+            pending_hltb = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games
                 WHERE hltb_checked = 0
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Never checked / pending",
                 pending_hltb,
             )
 
-            review_count = scalar(
-                connection,
-                """
+            review_count = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games
                 WHERE hltb_match_status = 'review'
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             if review_count:
-                warnings.append(
-                    f"{review_count} HLTB match(es) still need review"
-                )
+                warnings.append(f"{review_count} HLTB match(es) still need review")
 
         if "hltb_candidates" in tables:
-            orphan_candidates = scalar(
-                connection,
-                """
+            orphan_candidates = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM hltb_candidates AS candidate
                 LEFT JOIN games AS game
                     ON game.app_id = candidate.app_id
                 WHERE game.app_id IS NULL
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Orphan HLTB candidates",
@@ -432,20 +489,21 @@ def audit_database(database_path):
             )
 
             if orphan_candidates:
-                errors.append(
-                    f"{orphan_candidates} orphan HLTB candidate row(s)"
-                )
+                errors.append(f"{orphan_candidates} orphan HLTB candidate row(s)")
 
-            candidate_status_mismatch = scalar(
-                connection,
-                """
+            candidate_status_mismatch = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM hltb_candidates AS candidate
                 JOIN games AS game
                     ON game.app_id = candidate.app_id
                 WHERE COALESCE(game.hltb_match_status, '') != 'review'
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Candidates outside review state",
@@ -465,9 +523,10 @@ def audit_database(database_path):
         }
 
         if achievement_required.issubset(game_columns):
-            invalid_achievement_rows = scalar(
-                connection,
-                """
+            invalid_achievement_rows = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games
                 WHERE achievement_total < 0
@@ -478,7 +537,9 @@ def audit_database(database_path):
                         AND achievements_unlocked > achievement_total
                    )
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Invalid achievement totals",
@@ -497,16 +558,19 @@ def audit_database(database_path):
             "playtime_minutes",
             "achievements_playtime_minutes",
         }.issubset(game_columns):
-            changed_since_check = scalar(
-                connection,
-                """
+            changed_since_check = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games
                 WHERE achievements_checked = 1
                   AND achievements_playtime_minutes IS NOT NULL
                   AND playtime_minutes > achievements_playtime_minutes
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Playtime changed since check",
@@ -517,6 +581,44 @@ def audit_database(database_path):
                 warnings.append(
                     f"{changed_since_check} game(s) are eligible for Refresh Changed"
                 )
+
+        print_heading("Metadata coverage")
+
+        if {"game_genres", "genres"}.issubset(tables):
+            print_count(
+                "Games with genres",
+                scalar(
+                    connection,
+                    "SELECT COUNT(DISTINCT app_id) FROM game_genres",
+                )
+                or 0,
+            )
+            print_count(
+                "Genre assignments",
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM game_genres",
+                )
+                or 0,
+            )
+
+        if {"game_tags", "tags"}.issubset(tables):
+            print_count(
+                "Games with tags",
+                scalar(
+                    connection,
+                    "SELECT COUNT(DISTINCT app_id) FROM game_tags",
+                )
+                or 0,
+            )
+            print_count(
+                "Tag assignments",
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM game_tags",
+                )
+                or 0,
+            )
 
         print_heading("Genre / tag integrity")
 
@@ -550,16 +652,18 @@ def audit_database(database_path):
         ]
 
         for label, query in checks:
-            if (
-                ("game_genres" in query and "game_genres" not in tables)
-                or ("game_tags" in query and "game_tags" not in tables)
+            if ("game_genres" in query and "game_genres" not in tables) or (
+                "game_tags" in query and "game_tags" not in tables
             ):
                 continue
 
-            count = scalar(
-                connection,
-                query,
-            ) or 0
+            count = (
+                scalar(
+                    connection,
+                    query,
+                )
+                or 0
+            )
 
             print_count(
                 label,
@@ -567,14 +671,13 @@ def audit_database(database_path):
             )
 
             if count:
-                errors.append(
-                    f"{count} {label.lower()}"
-                )
+                errors.append(f"{count} {label.lower()}")
 
         if "metadata_checked" in game_columns:
-            checked_without_genres_or_tags = scalar(
-                connection,
-                """
+            checked_without_genres_or_tags = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM games AS game
                 WHERE game.metadata_checked = 1
@@ -589,7 +692,9 @@ def audit_database(database_path):
                       WHERE gt.app_id = game.app_id
                   )
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Checked with no genres/tags",
@@ -604,21 +709,27 @@ def audit_database(database_path):
         print_heading("Ratings / recommendations")
 
         if "game_ratings" in tables:
-            rating_count = scalar(
-                connection,
-                "SELECT COUNT(*) FROM game_ratings",
-            ) or 0
+            rating_count = (
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM game_ratings",
+                )
+                or 0
+            )
 
-            orphan_ratings = scalar(
-                connection,
-                """
+            orphan_ratings = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM game_ratings AS rating
                 LEFT JOIN games AS game
                     ON game.app_id = rating.app_id
                 WHERE game.app_id IS NULL
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Ratings",
@@ -630,15 +741,16 @@ def audit_database(database_path):
             )
 
             if orphan_ratings:
-                errors.append(
-                    f"{orphan_ratings} rating row(s) reference missing games"
-                )
+                errors.append(f"{orphan_ratings} rating row(s) reference missing games")
 
         if "recommendation_state" in tables:
-            state_count = scalar(
-                connection,
-                "SELECT COUNT(*) FROM recommendation_state",
-            ) or 0
+            state_count = (
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM recommendation_state",
+                )
+                or 0
+            )
 
             print_count(
                 "Recommendation state rows",
@@ -646,26 +758,30 @@ def audit_database(database_path):
             )
 
             if state_count > 1:
-                errors.append(
-                    "recommendation_state contains more than one row"
-                )
+                errors.append("recommendation_state contains more than one row")
 
         if "game_recommendations" in tables:
-            recommendation_count = scalar(
-                connection,
-                "SELECT COUNT(*) FROM game_recommendations",
-            ) or 0
+            recommendation_count = (
+                scalar(
+                    connection,
+                    "SELECT COUNT(*) FROM game_recommendations",
+                )
+                or 0
+            )
 
-            orphan_recommendations = scalar(
-                connection,
-                """
+            orphan_recommendations = (
+                scalar(
+                    connection,
+                    """
                 SELECT COUNT(*)
                 FROM game_recommendations AS recommendation
                 LEFT JOIN games AS game
                     ON game.app_id = recommendation.app_id
                 WHERE game.app_id IS NULL
                 """,
-            ) or 0
+                )
+                or 0
+            )
 
             print_count(
                 "Saved recommendations",
@@ -682,10 +798,13 @@ def audit_database(database_path):
                 )
 
             if recommendation_count and "recommendation_state" in tables:
-                state_count = scalar(
-                    connection,
-                    "SELECT COUNT(*) FROM recommendation_state",
-                ) or 0
+                state_count = (
+                    scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM recommendation_state",
+                    )
+                    or 0
+                )
 
                 if state_count == 0:
                     warnings.append(
@@ -724,8 +843,8 @@ def audit_database(database_path):
 def main():
     parser = argparse.ArgumentParser(
         description=(
-            "Read-only structural and maintenance audit for the "
-            "Steam Backlog DB Phase 5 data model."
+            "Read-only structural, maintenance, and persistence audit "
+            "for the Steam Backlog DB database."
         )
     )
     parser.add_argument(
