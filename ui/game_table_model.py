@@ -100,9 +100,22 @@ class GameTableModel(QAbstractTableModel):
             return f"{game.achievements_unlocked}/{game.achievement_total}"
 
         if column == 7:
+            display_type = None
+
+            if self.steam_type_resolver is not None:
+                display_type = self.steam_type_resolver(game)
+
+            if display_type in {"Test / Beta", "Unknown (Test / Beta)"}:
+                return display_type
+
+            if game.classification_updated_at is None:
+                return "Not Checked"
+
+            if display_type is not None:
+                return display_type
+
             steam_type_names = {
                 "game": "Game",
-                "test": "Test / Beta",
                 "software": "Software",
                 "dlc": "DLC",
                 "video": "Video",
@@ -110,30 +123,7 @@ class GameTableModel(QAbstractTableModel):
                 "unknown": "Unknown",
             }
 
-            inferred_type = game.steam_type
-
-            if self.steam_type_resolver is not None:
-                inferred_type = self.steam_type_resolver(game)
-
-            if inferred_type == "test":
-                if game.steam_type == "unknown":
-                    return "Unknown (Test / Beta)"
-
-                return "Test / Beta"
-
-            if game.classification_updated_at is None:
-                return "Not Checked"
-
-            if game.steam_type == "unknown" and inferred_type == "game":
-                return "Unknown (Game)"
-
-            if game.steam_type == "unknown" and inferred_type == "software":
-                return "Unknown (Software)"
-
-            return steam_type_names.get(
-                game.steam_type,
-                "Unknown",
-            )
+            return steam_type_names.get(game.steam_type, "Unknown")
 
         return None
 

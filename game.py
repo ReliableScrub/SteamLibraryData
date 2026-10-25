@@ -170,14 +170,3 @@ class Game:
             return "Backlog"
 
         return "Inactive"
-
-    def is_backlog_eligible(self):
-        if self.is_test_build():
-            return False
-
-        return self.steam_type not in {
-            "software",
-            "dlc",
-            "video",
-            "hardware",
-        }

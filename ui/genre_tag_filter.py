@@ -1,5 +1,10 @@
 import time
 
+from game_classification import (
+    GameClassifier,
+    canonical_feature_key,
+    canonical_genre_name,
+)
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -13,32 +18,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-GENRE_CANONICAL_NAMES = {
-    "free to play": "Free To Play",
-}
-
-
-def canonical_genre_name(name):
-    if not isinstance(name, str):
-        return ""
-
-    cleaned = " ".join(name.split())
-
-    if not cleaned:
-        return ""
-
-    return GENRE_CANONICAL_NAMES.get(
-        cleaned.casefold(),
-        cleaned,
-    )
-
-
-def canonical_feature_key(name):
-    if not isinstance(name, str):
-        return ""
-
-    return " ".join(name.split()).casefold()
 
 
 class _CheckListItemDelegate(QStyledItemDelegate):
@@ -166,8 +145,7 @@ class GenreTagFilterWidget(QWidget):
         self._selected_software_genres = set()
         self._selected_tags = set()
 
-        self._software_exclusive_genre_keys = set()
-        self._software_exclusive_tag_keys = set()
+        self.classifier = GameClassifier()
 
         self.filter_button = QPushButton("Genres / Tags")
         self.filter_button.clicked.connect(self._open_dialog)
@@ -283,18 +261,13 @@ class GenreTagFilterWidget(QWidget):
                         display,
                     )
 
-        game_genre_keys = set(official_game_genres)
-        software_genre_keys = set(official_software_genres)
-        game_tag_keys = set(official_game_tags)
-        software_tag_keys = set(official_software_tags)
-
-        self._software_exclusive_genre_keys = software_genre_keys - game_genre_keys
-        self._software_exclusive_tag_keys = software_tag_keys - game_tag_keys
+        self.classifier = GameClassifier(games)
 
         game_genres = dict(official_game_genres)
         software_genres = {
             key: official_software_genres[key]
-            for key in self._software_exclusive_genre_keys
+            for key in self.classifier.software_exclusive_genre_keys
+            if key in official_software_genres
         }
         all_tags = {
             **official_game_tags,
@@ -319,7 +292,7 @@ class GenreTagFilterWidget(QWidget):
                     display = canonical_genre_name(genre)
                     key = canonical_feature_key(display)
 
-                    if key in self._software_exclusive_genre_keys:
+                    if key in self.classifier.software_exclusive_genre_keys:
                         software_genres.setdefault(key, display)
 
             for tag in getattr(game, "tags", {}) or {}:
@@ -367,66 +340,10 @@ class GenreTagFilterWidget(QWidget):
         self._update_button_text()
 
     def inferred_steam_type(self, game):
-        is_test_build = getattr(game, "is_test_build", None)
-
-        if callable(is_test_build) and is_test_build():
-            return "test"
-
-        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
-
-        if raw_type != "unknown":
-            return raw_type
-
-        if not getattr(game, "metadata_checked", False):
-            return "unknown"
-
-        genre_keys = {
-            canonical_feature_key(canonical_genre_name(genre))
-            for genre in getattr(game, "genres", []) or []
-            if canonical_genre_name(genre)
-        }
-        tag_keys = {
-            canonical_feature_key(tag)
-            for tag in getattr(game, "tags", {}) or {}
-            if canonical_feature_key(tag)
-        }
-
-        if (
-            genre_keys & self._software_exclusive_genre_keys
-            or tag_keys & self._software_exclusive_tag_keys
-        ):
-            return "software"
-
-        return "game"
+        return self.classifier.inferred_steam_type(game)
 
     def display_steam_type(self, game):
-        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
-        inferred = self.inferred_steam_type(game)
-
-        if inferred == "test":
-            if raw_type == "unknown":
-                return "Unknown (Test / Beta)"
-
-            return "Test / Beta"
-
-        if raw_type == "unknown":
-            if inferred == "game":
-                return "Unknown (Game)"
-
-            if inferred == "software":
-                return "Unknown (Software)"
-
-            return "Unknown"
-
-        names = {
-            "game": "Game",
-            "software": "Software",
-            "dlc": "DLC",
-            "video": "Video",
-            "hardware": "Hardware",
-        }
-
-        return names.get(raw_type, raw_type.replace("_", " ").title())
+        return self.classifier.display_steam_type(game)
 
     def matches_type_filter(self, game, selected_type):
         if selected_type == "All Types":
@@ -470,13 +387,7 @@ class GenreTagFilterWidget(QWidget):
         return raw_type == wanted_type
 
     def is_backlog_eligible(self, game):
-        return self.inferred_steam_type(game) not in {
-            "test",
-            "software",
-            "dlc",
-            "video",
-            "hardware",
-        }
+        return self.classifier.is_backlog_eligible(game)
 
     def matches_game(self, game):
         return self.matches(

@@ -179,29 +179,6 @@ class SelectedGameRefreshController(QObject):
         self._busy = False
         self.busy_changed.emit(False)
 
-    def _text_edited(self, text):
-        suffix = self.suffix()
-        cleaned = text
-
-        if suffix and cleaned.endswith(suffix):
-            cleaned = cleaned[: -len(suffix)]
-
-        self._editing_was_empty = not cleaned.strip()
-
-    def _normalize_empty_value(self):
-        if self._editing_was_empty:
-            self.setValue(self.minimum())
-
-        self._editing_was_empty = False
-
-    def focusInEvent(self, event):
-        super().focusInEvent(event)
-
-        QTimer.singleShot(
-            0,
-            self.selectAll,
-        )
-
 
 class EscapeClearsLineEdit(QLineEdit):
     def keyPressEvent(self, event):
@@ -425,7 +402,7 @@ class LibraryTab(QWidget):
         self.game_table_model = GameTableModel(self.filtered_games, self)
 
         self.game_table_model.set_steam_type_resolver(
-            self.genre_tag_filter.inferred_steam_type
+            self.genre_tag_filter.display_steam_type
         )
 
         self.game_table_model.set_ratings(load_game_ratings())

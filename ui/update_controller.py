@@ -1,6 +1,7 @@
 import time
 from functools import partial
 
+from game_classification import GameClassifier
 from PySide6.QtCore import QObject, QThread, Signal
 
 from game_updates import (
@@ -288,6 +289,9 @@ class UpdateController(QObject):
 
         self.refresh_statuses()
 
+    def _classifier(self):
+        return GameClassifier(self.games)
+
     def failures(self):
         return list(self._failures)
 
@@ -319,26 +323,35 @@ class UpdateController(QObject):
         return any(game.hltb_match_status == "review" for game in self.games)
 
     def achievement_pending_count(self):
-        return sum(1 for game in self.games if not game.achievements_checked)
+        classifier = self._classifier()
+
+        return sum(
+            1
+            for game in self.games
+            if not game.achievements_checked and classifier.is_backlog_eligible(game)
+        )
 
     def has_missing_data(self):
+        classifier = self._classifier()
+
         return any(
             game.classification_updated_at is None
             or not game.metadata_checked
             or (
-                game.is_backlog_eligible()
+                classifier.is_backlog_eligible(game)
                 and (not game.hltb_checked or not game.achievements_checked)
             )
             for game in self.games
         )
 
     def missing_data_needs_steam_id(self):
+        classifier = self._classifier()
+
         return any(
-            not game.achievements_checked and game.is_backlog_eligible()
+            not game.achievements_checked and classifier.is_backlog_eligible(game)
             for game in self.games
         )
 
-    @staticmethod
     @staticmethod
     def _oldest_first(games, timestamp_attr, limit=None):
         ordered = sorted(
@@ -380,22 +393,25 @@ class UpdateController(QObject):
         return [game for game in self.games if game.metadata_checked]
 
     def hltb_refreshable_games(self):
+        classifier = self._classifier()
+
         return [
             game
             for game in self.games
             if game.hltb_checked
-            and game.is_backlog_eligible()
+            and classifier.is_backlog_eligible(game)
             and game.hltb_match_status != "review"
         ]
 
     def changed_achievement_games(self):
+        classifier = self._classifier()
         games = []
 
         for game in self.games:
             if not game.achievements_checked:
                 continue
 
-            if not game.is_backlog_eligible():
+            if not classifier.is_backlog_eligible(game):
                 continue
 
             checked_playtime = game.achievements_playtime_minutes
@@ -527,7 +543,10 @@ class UpdateController(QObject):
     def refresh_statuses(self):
         self.status_changed.emit("library", f"Steam Library: {len(self.games)} games")
 
-        eligible_games = [game for game in self.games if game.is_backlog_eligible()]
+        classifier = self._classifier()
+        eligible_games = [
+            game for game in self.games if classifier.is_backlog_eligible(game)
+        ]
 
         matched = sum(
             1 for game in eligible_games if game.hltb_match_status == "matched"
@@ -775,7 +794,12 @@ class UpdateController(QObject):
         self.busy_changed.emit(self.is_running())
 
     def start_hltb_batch(self):
-        games = [game for game in self.games if not game.hltb_checked]
+        classifier = self._classifier()
+        games = [
+            game
+            for game in self.games
+            if not game.hltb_checked and classifier.is_backlog_eligible(game)
+        ]
 
         if not games:
             return "nothing"
@@ -803,10 +827,11 @@ class UpdateController(QObject):
         )
 
     def recent_achievement_games(self):
+        classifier = self._classifier()
         games = []
 
         for game in self.games:
-            if not game.is_backlog_eligible():
+            if not classifier.is_backlog_eligible(game):
                 continue
 
             recent_minutes = game.playtime_2weeks_minutes or 0
@@ -857,7 +882,12 @@ class UpdateController(QObject):
         )
 
     def start_achievement_batch(self, steam_id):
-        games = [game for game in self.games if not game.achievements_checked]
+        classifier = self._classifier()
+        games = [
+            game
+            for game in self.games
+            if not game.achievements_checked and classifier.is_backlog_eligible(game)
+        ]
 
         if not games:
             return "nothing"
@@ -999,16 +1029,17 @@ class UpdateController(QObject):
         if reset_failures:
             self._reset_failures()
 
+        classifier = self._classifier()
         hltb_games = [
             game
             for game in self.games
-            if not game.hltb_checked and game.is_backlog_eligible()
+            if not game.hltb_checked and classifier.is_backlog_eligible(game)
         ]
         metadata_games = [game for game in self.games if not game.metadata_checked]
         achievement_games = [
             game
             for game in self.games
-            if not game.achievements_checked and game.is_backlog_eligible()
+            if not game.achievements_checked and classifier.is_backlog_eligible(game)
         ]
 
         if not hltb_games and not metadata_games and not achievement_games:
@@ -1177,19 +1208,20 @@ class UpdateController(QObject):
         self.data_changed.emit()
         self.refresh_statuses()
 
+        classifier = self._classifier()
         remaining = sum(
             1 for game in self.games if game.classification_updated_at is None
         )
         remaining += sum(
             1
             for game in self.games
-            if not game.hltb_checked and game.is_backlog_eligible()
+            if not game.hltb_checked and classifier.is_backlog_eligible(game)
         )
         remaining += sum(1 for game in self.games if not game.metadata_checked)
         remaining += sum(
             1
             for game in self.games
-            if not game.achievements_checked and game.is_backlog_eligible()
+            if not game.achievements_checked and classifier.is_backlog_eligible(game)
         )
 
         if was_cancelled:
