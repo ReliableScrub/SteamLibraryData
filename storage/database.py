@@ -841,6 +841,7 @@ def reset_empty_hltb_checks():
 
         return cursor.rowcount
 
+
 def load_hltb_candidates(app_id):
     with get_connection() as connection:
         rows = connection.execute(
@@ -909,7 +910,7 @@ def set_game_rating(app_id, rating):
                 rating,
                 updated_at
             )
-            VALUES (?, ?, unixepoch())
+            VALUES (?, ?, CAST(strftime('%s', 'now') AS INTEGER))
             ON CONFLICT(app_id) DO UPDATE SET
                 rating = excluded.rating,
                 updated_at = excluded.updated_at

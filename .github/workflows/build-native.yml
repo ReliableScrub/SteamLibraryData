@@ -15,7 +15,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version-file: .python-version
+          python-version: "3.12"
           cache: pip
 
       - name: Install Linux system dependencies
@@ -31,7 +31,8 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
 
       - name: Compile Python
         run: python -m compileall .
@@ -41,29 +42,54 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: pytest
 
-      - name: Create fresh Linux deploy configuration
+      - name: Build Linux application
         run: |
           rm -f pysidedeploy.spec
-          pyside6-deploy main.py --init -f
 
-      - name: Build Linux application
-        run: pyside6-deploy -f
+          pyside6-deploy main.py \
+            --name SteamLibraryData \
+            --mode onefile \
+            -f
 
-      - name: Package Linux application
+      - name: Find and package Linux application
         run: |
-          chmod +x dist/SteamLibraryData.bin
-          tar -czf SteamLibraryData-linux-x64.tar.gz \
-            -C dist SteamLibraryData.bin
+          echo "Generated binary files:"
+          find . -maxdepth 3 -type f -name "*.bin" -print
+
+          APP_PATH="$(find . -maxdepth 3 -type f -name 'SteamLibraryData.bin' -print -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "SteamLibraryData.bin was not found by name."
+            echo "Looking for any generated .bin file..."
+
+            APP_PATH="$(find . -maxdepth 3 -type f -name '*.bin' -print -quit)"
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No Linux application binary was found."
+            exit 1
+          fi
+
+          echo "Using Linux application: $APP_PATH"
+
+          cp "$APP_PATH" SteamLibraryData-linux-x64.bin
+          chmod +x SteamLibraryData-linux-x64.bin
+
+          tar -czf \
+            SteamLibraryData-linux-x64.tar.gz \
+            SteamLibraryData-linux-x64.bin
 
       - name: Upload Linux build
         uses: actions/upload-artifact@v7
         with:
           name: SteamLibraryData-linux-x64
           path: SteamLibraryData-linux-x64.tar.gz
+          if-no-files-found: error
 
 
   macos:
     name: macOS ${{ matrix.arch }}
+
     strategy:
       fail-fast: false
       matrix:
@@ -83,13 +109,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version-file: .python-version
+          python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
 
       - name: Compile Python
         run: python -m compileall .
@@ -99,24 +126,51 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: pytest
 
-      - name: Create fresh macOS deploy configuration
+      - name: Build macOS application
         run: |
           rm -f pysidedeploy.spec
-          pyside6-deploy main.py --init -f
 
-      - name: Build macOS application
-        run: pyside6-deploy -f
+          pyside6-deploy main.py \
+            --name SteamLibraryData \
+            --mode onefile \
+            -f
 
-      - name: Package macOS application
+      - name: Find and package macOS application
         run: |
+          echo "Generated application bundles:"
+          find . -maxdepth 3 -type d -name "*.app" -print
+
+          APP_PATH="$(find . -maxdepth 3 -type d -name 'SteamLibraryData.app' -print -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "SteamLibraryData.app was not found by name."
+            echo "Looking for any generated .app bundle..."
+
+            APP_PATH="$(find . -maxdepth 3 -type d -name '*.app' -print -quit)"
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "No macOS application bundle was found."
+            exit 1
+          fi
+
+          echo "Using macOS application: $APP_PATH"
+
+          if [ "$APP_PATH" != "./SteamLibraryData.app" ]; then
+            rm -rf SteamLibraryData.app
+            cp -R "$APP_PATH" SteamLibraryData.app
+            APP_PATH="SteamLibraryData.app"
+          fi
+
           ditto -c -k \
             --sequesterRsrc \
             --keepParent \
-            dist/SteamLibraryData.app \
-            SteamLibraryData-macos-${{ matrix.arch }}.zip
+            "$APP_PATH" \
+            "SteamLibraryData-macos-${{ matrix.arch }}.zip"
 
       - name: Upload macOS build
         uses: actions/upload-artifact@v7
         with:
           name: SteamLibraryData-macos-${{ matrix.arch }}
           path: SteamLibraryData-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
