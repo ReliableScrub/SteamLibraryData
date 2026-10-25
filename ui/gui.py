@@ -24,7 +24,7 @@ from api.steam_api import (
     SteamApiKeyRejected,
     validate_steam_account,
 )
-from storage.credentials import set_steam_api_key
+from storage.credentials import delete_steam_api_key, set_steam_api_key
 from storage.database import (
     delete_database,
     get_database_steam_id,
@@ -129,7 +129,7 @@ class MainWindow(QMainWindow):
             self,
         )
 
-        self.setWindowTitle("Steam Backlog")
+        self.setWindowTitle("SteamLibraryData")
         self.setMinimumSize(1000, 650)
         self.start_maximized = restore_window_state(self)
         self._create_tabs()
@@ -267,7 +267,6 @@ class MainWindow(QMainWindow):
             self.start_steam_classification
         )
 
-
         self.maintenance_tab.hltb_refresh_button.clicked.connect(
             self.start_oldest_hltb_refresh
         )
@@ -299,6 +298,8 @@ class MainWindow(QMainWindow):
         )
 
         self.maintenance_tab.change_api_key_button.clicked.connect(self.change_api_key)
+
+        self.maintenance_tab.remove_api_key_button.clicked.connect(self.remove_api_key)
 
         self.maintenance_tab.clear_images_button.clicked.connect(
             self.clear_cached_images
@@ -734,6 +735,48 @@ class MainWindow(QMainWindow):
             "The new Steam Web API key has been saved securely.\n\n"
             "The application will now close so all Steam services use "
             "the new key when it is reopened.",
+        )
+
+        QApplication.quit()
+
+    def remove_api_key(self):
+        result = QMessageBox.question(
+            self,
+            "Remove Stored API Key",
+            "Remove the Steam Web API key from your operating system's "
+            "credential manager?\n\n"
+            "Your SteamID64, library database, ratings, recommendations, "
+            "settings, and other local data will not be deleted.\n\n"
+            "Steam API features will require a key again the next time "
+            "the application starts.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if result != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            delete_steam_api_key()
+
+        except RuntimeError as error:
+            QMessageBox.critical(
+                self,
+                "Credential Storage Error",
+                str(error),
+            )
+            return
+
+        self.steam_api_key = None
+        self.maintenance_tab.set_api_key_configured(False)
+
+        QMessageBox.information(
+            self,
+            "Steam Web API Key Removed",
+            "The stored Steam Web API key has been removed from the "
+            "operating system's credential manager.\n\n"
+            "The application will now close. You will be asked for an "
+            "API key again when it is reopened.",
         )
 
         QApplication.quit()

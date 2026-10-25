@@ -121,9 +121,11 @@ class MaintenanceTab(QWidget):
         self.change_steam_id_button = QPushButton("Change SteamID64")
 
         self.api_key_label = QLabel()
-        self.set_api_key_configured(api_key_configured)
 
         self.change_api_key_button = QPushButton("Change Steam Web API Key")
+        self.remove_api_key_button = QPushButton("Remove Stored API Key")
+
+        self.set_api_key_configured(api_key_configured)
 
         self.appearance_combo = QComboBox()
         self.appearance_combo.addItems(
@@ -344,7 +346,12 @@ class MaintenanceTab(QWidget):
 
         layout.addWidget(self.api_key_label)
 
-        layout.addWidget(self.change_api_key_button)
+        api_key_buttons = QHBoxLayout()
+        api_key_buttons.addWidget(self.change_api_key_button)
+        api_key_buttons.addWidget(self.remove_api_key_button)
+        api_key_buttons.addStretch()
+
+        layout.addLayout(api_key_buttons)
 
         layout.addSpacing(24)
 
@@ -414,14 +421,17 @@ class MaintenanceTab(QWidget):
         else:
             self.account_label.setText(f"SteamID64: {steam_id}")
 
-    def set_api_key_configured(
-        self,
-        configured,
-    ):
+    def set_api_key_configured(self, configured):
+        self._api_key_configured = bool(configured)
+
         if configured:
             self.api_key_label.setText("Steam Web API key: Configured")
         else:
             self.api_key_label.setText("Steam Web API key: Not configured")
+
+        self.remove_api_key_button.setEnabled(
+            self._api_key_configured and not self._busy
+        )
 
     def set_status(
         self,
@@ -532,5 +542,7 @@ class MaintenanceTab(QWidget):
         self.change_steam_id_button.setEnabled(enabled)
 
         self.change_api_key_button.setEnabled(enabled)
+
+        self.remove_api_key_button.setEnabled(enabled and self._api_key_configured)
 
         self.reset_database_button.setEnabled(enabled)
