@@ -327,7 +327,7 @@ class GenreTagFilterWidget(QWidget):
         }
         tag_keys = {
             canonical_feature_key(tag)
-            for tag in (getattr(game, "tags", {}) or {})
+            for tag in getattr(game, "tags", {}) or {}
             if canonical_feature_key(tag)
         }
 

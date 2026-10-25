@@ -1,6 +1,6 @@
 import sys
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 650)
         self.start_maximized = restore_window_state(self)
         self._create_tabs()
+        self._apply_interaction_cursors()
 
         self._bind_tabs()
         self._bind_update_controller()
@@ -105,6 +106,10 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.first_run_setup)
         else:
             QTimer.singleShot(0, self.start_startup_refresh)
+
+    def _apply_interaction_cursors(self):
+        for button in self.findChildren(QPushButton):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _create_contact_tab(self):
         tab = QWidget()

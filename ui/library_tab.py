@@ -48,6 +48,7 @@ from storage.settings import (
 )
 from ui.game_table_model import GameTableModel
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.semantic_widgets import BadgeLabel, SectionHeading
 from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 
@@ -269,8 +270,12 @@ class LibraryTab(QWidget):
         self.hltb_max_filter.setSuffix(" h")
 
         self.genre_tag_filter = GenreTagFilterWidget(self)
-
         self.genre_tag_filter.set_available_from_games(self.games)
+
+        self.clear_genre_tag_button = QPushButton("Clear Genres / Tags")
+        self.clear_genre_tag_button.setEnabled(
+            self.genre_tag_filter.has_active_filters()
+        )
 
         self.rating_filter = QComboBox()
 
@@ -405,9 +410,13 @@ class LibraryTab(QWidget):
 
         self.status_label.setStyleSheet("font-size: 10pt;")
 
-        self.status_value = QLabel("No game selected")
+        self.status_value = BadgeLabel("NO GAME", tone="neutral")
 
-        self.status_value.setStyleSheet("font-size: 10pt;")
+        self.type_badge = BadgeLabel("", tone="neutral")
+        self.type_badge.setVisible(False)
+
+        self.reception_badge = BadgeLabel("", tone="neutral")
+        self.reception_badge.setVisible(False)
 
         self.manual_status_combo = QComboBox()
 
@@ -433,13 +442,26 @@ class LibraryTab(QWidget):
         self.rating_combo.setEnabled(False)
         self.rating_combo.setToolTip("How much you personally enjoyed this game.")
 
-        self.game_details = QLabel("")
+        self.about_heading = SectionHeading("ABOUT")
 
+        self.game_description = QLabel("")
+        self.game_description.setWordWrap(True)
+        self.game_description.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        self.details_heading = SectionHeading("DETAILS")
+
+        self.game_details = QLabel("")
         self.game_details.setWordWrap(True)
         self.game_details.setStyleSheet("font-size: 11pt;")
         self.game_details.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+
+        self.empty_details_label = QLabel("Select a game to view details")
+        self.empty_details_label.setProperty("emptyState", True)
+        self.empty_details_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.steam_page_button = QPushButton("Steam Page")
 
@@ -486,6 +508,7 @@ class LibraryTab(QWidget):
 
         secondary_filter_row = QHBoxLayout()
         secondary_filter_row.addWidget(self.genre_tag_filter, 1)
+        secondary_filter_row.addWidget(self.clear_genre_tag_button)
         secondary_filter_row.addSpacing(8)
         secondary_filter_row.addWidget(QLabel("Rating:"))
         secondary_filter_row.addWidget(self.rating_filter)
@@ -507,6 +530,8 @@ class LibraryTab(QWidget):
         details_layout.setContentsMargins(12, 12, 12, 12)
         details_layout.setSpacing(8)
 
+        details_layout.addWidget(self.empty_details_label, 1)
+
         details_layout.addWidget(
             self.game_image,
             alignment=Qt.AlignmentFlag.AlignHCenter,
@@ -516,6 +541,8 @@ class LibraryTab(QWidget):
         status_row = QHBoxLayout()
         status_row.addWidget(self.status_label)
         status_row.addWidget(self.status_value)
+        status_row.addWidget(self.type_badge)
+        status_row.addWidget(self.reception_badge)
         status_row.addSpacing(8)
         status_row.addWidget(self.manual_status_combo)
         status_row.addStretch()
@@ -527,9 +554,13 @@ class LibraryTab(QWidget):
         rating_row.addStretch()
         details_layout.addLayout(rating_row)
 
+        details_layout.addWidget(self.about_heading)
+        details_layout.addWidget(self.game_description)
+        details_layout.addWidget(self.details_heading)
         details_layout.addWidget(self.game_details)
 
-        details_layout.addWidget(QLabel("Refresh selected:"))
+        self.refresh_selected_label = QLabel("Refresh selected:")
+        details_layout.addWidget(self.refresh_selected_label)
 
         refresh_row = QHBoxLayout()
         refresh_row.addWidget(self.refresh_hltb_button)
@@ -546,6 +577,31 @@ class LibraryTab(QWidget):
         action_row.addStretch()
         details_layout.addLayout(action_row)
         details_layout.addStretch()
+
+        self._game_detail_widgets = [
+            self.game_image,
+            self.game_title,
+            self.status_label,
+            self.status_value,
+            self.type_badge,
+            self.reception_badge,
+            self.manual_status_combo,
+            self.rating_label,
+            self.rating_combo,
+            self.about_heading,
+            self.game_description,
+            self.details_heading,
+            self.game_details,
+            self.refresh_selected_label,
+            self.refresh_hltb_button,
+            self.refresh_metadata_button,
+            self.refresh_achievements_button,
+            self.selected_refresh_status,
+            self.trailer_player,
+            self.steam_page_button,
+        ]
+
+        self._set_detail_content_visible(False)
 
         self.details_panel.setWidget(self.details_content)
 
@@ -611,8 +667,9 @@ class LibraryTab(QWidget):
 
         self.status_filter.currentTextChanged.connect(self._library_filter_changed)
         self.type_filter.currentTextChanged.connect(self._library_filter_changed)
-        self.hltb_metric_filter.currentTextChanged.connect(self._library_filter_changed)
-        self.genre_tag_filter.filters_changed.connect(self.apply_filters)
+        self.hltb_metric_filter.currentTextChanged.connect(self._hltb_metric_changed)
+        self.genre_tag_filter.filters_changed.connect(self._genre_tag_filters_changed)
+        self.clear_genre_tag_button.clicked.connect(self.genre_tag_filter.clear_filters)
 
         self.hltb_min_filter.valueChanged.connect(self.hltb_min_changed)
         self.hltb_max_filter.valueChanged.connect(self.hltb_max_changed)
@@ -851,6 +908,18 @@ class LibraryTab(QWidget):
     def _library_filter_changed(self):
         self.apply_filters()
         self._save_library_view()
+
+    def _genre_tag_filters_changed(self):
+        self.clear_genre_tag_button.setEnabled(
+            self.genre_tag_filter.has_active_filters()
+        )
+        self.apply_filters()
+
+    def _hltb_metric_changed(self, *_):
+        self._library_filter_changed()
+
+        if self.selected_game is not None:
+            self._update_game_details_text(self.selected_game)
 
     def _advanced_expanded_changed(self, expanded):
         self.advanced_panel.setVisible(expanded)
@@ -1188,6 +1257,53 @@ class LibraryTab(QWidget):
         self.filtered_games = filtered_games
         self.game_table_model.set_games(filtered_games)
 
+    def _set_detail_content_visible(self, visible):
+        self.empty_details_label.setVisible(not visible)
+
+        for widget in self._game_detail_widgets:
+            widget.setVisible(visible)
+
+    @staticmethod
+    def _status_tone(status):
+        tones = {
+            "Backlog": "accent",
+            "Playing": "accent",
+            "Completed": "positive",
+            "On Hold": "warning",
+            "Dropped": "danger",
+            "Inactive": "neutral",
+        }
+
+        return tones.get(status, "neutral")
+
+    @staticmethod
+    def _reception_badge(game):
+        positive = game.steamspy_positive
+        negative = game.steamspy_negative
+
+        if positive is None or negative is None:
+            return "RECEPTION UNKNOWN", "neutral"
+
+        total = positive + negative
+
+        if total == 0:
+            return "NO REVIEWS", "neutral"
+
+        percent = positive / total * 100
+
+        if total < PUBLIC_RECEPTION_MIN_REVIEWS:
+            tone = "warning"
+        elif percent >= 80:
+            tone = "positive"
+        elif percent >= 60:
+            tone = "accent"
+        elif percent >= 45:
+            tone = "warning"
+        else:
+            tone = "danger"
+
+        return f"{percent:.0f}% POSITIVE", tone
+
     @staticmethod
     def _public_reception_text(game):
         positive = game.steamspy_positive
@@ -1296,8 +1412,9 @@ class LibraryTab(QWidget):
         reception_text = self._public_reception_text(game)
         description_text = self._description_text(game)
 
+        self.game_description.setText(description_text)
+
         self.game_details.setText(
-            f"ABOUT\n{description_text}\n\n"
             f"Last played: {last_played_text}\n"
             f"Last 2 weeks: {recent_activity_text}\n\n"
             f"Steam Playtime: {playtime_hours:.1f} hours\n"
@@ -1323,9 +1440,25 @@ class LibraryTab(QWidget):
         self.details_panel.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
+        self._set_detail_content_visible(True)
         self.trailer_player.set_game(game.app_id)
         self.game_title.setText(game.name)
         self.selected_game = game
+
+        status = game.effective_status()
+        self.status_value.set_badge(status.upper(), self._status_tone(status))
+
+        steam_type = self.genre_tag_filter.display_steam_type(game)
+        self.type_badge.set_badge(steam_type.upper(), "neutral")
+        self.type_badge.setVisible(True)
+
+        reception_badge, reception_tone = self._reception_badge(game)
+        self.reception_badge.set_badge(
+            reception_badge,
+            reception_tone,
+            self._public_reception_text(game),
+        )
+        self.reception_badge.setVisible(True)
 
         self.manual_status_combo.blockSignals(True)
         self.manual_status_combo.setStyleSheet("font-size: 10pt;")
@@ -1345,14 +1478,12 @@ class LibraryTab(QWidget):
         self.rating_combo.setEnabled(True)
         self.rating_combo.blockSignals(False)
 
-        self.status_value.setFixedWidth(75)
-        self.status_value.setText(game.effective_status())
-
         self._update_game_details_text(game)
         self._request_short_description(game)
 
         self.steam_page_button.setEnabled(True)
         self.selected_refresh_status.setText("")
+        self._set_detail_content_visible(True)
         self._update_selected_refresh_enabled()
 
         try:
@@ -1740,8 +1871,11 @@ class LibraryTab(QWidget):
         )
         self.trailer_player.clear_game()
         self.game_title.setText("No game selected")
-        self.status_value.setText("No game selected")
+        self.status_value.set_badge("NO GAME", "neutral")
+        self.type_badge.setVisible(False)
+        self.reception_badge.setVisible(False)
 
+        self.game_description.setText("")
         self.game_details.setText("")
         self.game_image.setPixmap(QPixmap())
         self.game_image.setText("Select a game")
@@ -1757,6 +1891,7 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(False)
         self.selected_refresh_status.setText("")
+        self._set_detail_content_visible(False)
         self._update_selected_refresh_enabled()
 
         self.current_game_pixmap = None

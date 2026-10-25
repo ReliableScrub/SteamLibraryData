@@ -1,3 +1,5 @@
+import re
+
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -10,6 +12,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ui.semantic_widgets import set_dynamic_property
 
 
 class MaintenanceTab(QWidget):
@@ -37,6 +41,7 @@ class MaintenanceTab(QWidget):
         self.update_all_status = QLabel("Missing Data")
         self.update_all_button = QPushButton("Update Missing Data")
         self.cancel_updates_button = QPushButton("Cancel Updates")
+        self.cancel_updates_button.setProperty("role", "warning")
         self.cancel_updates_button.setEnabled(False)
 
         self.view_failures_button = QPushButton("View Failures")
@@ -80,6 +85,7 @@ class MaintenanceTab(QWidget):
         self.hltb_progress.setFormat("%v / %m")
 
         self.hltb_review_button = QPushButton("Review HLTB Matches")
+        self.hltb_review_button.setProperty("role", "warning")
         self.hltb_review_button.setEnabled(False)
 
         self.metadata_status = QLabel()
@@ -346,12 +352,8 @@ class MaintenanceTab(QWidget):
 
         layout.addWidget(self.api_key_label)
 
-        api_key_buttons = QHBoxLayout()
-        api_key_buttons.addWidget(self.change_api_key_button)
-        api_key_buttons.addWidget(self.remove_api_key_button)
-        api_key_buttons.addStretch()
-
-        layout.addLayout(api_key_buttons)
+        layout.addWidget(self.change_api_key_button)
+        layout.addWidget(self.remove_api_key_button)
 
         layout.addSpacing(24)
 
@@ -421,17 +423,90 @@ class MaintenanceTab(QWidget):
         else:
             self.account_label.setText(f"SteamID64: {steam_id}")
 
-    def set_api_key_configured(self, configured):
+    def set_api_key_configured(
+        self,
+        configured,
+    ):
         self._api_key_configured = bool(configured)
 
-        if configured:
+        if self._api_key_configured:
             self.api_key_label.setText("Steam Web API key: Configured")
         else:
             self.api_key_label.setText("Steam Web API key: Not configured")
 
-        self.remove_api_key_button.setEnabled(
-            self._api_key_configured and not self._busy
-        )
+        if hasattr(self, "remove_api_key_button"):
+            self.remove_api_key_button.setEnabled(
+                self._api_key_configured and not self._busy
+            )
+
+    @staticmethod
+    def _status_tone(source, text):
+        lowered = text.lower()
+
+        if "failed" in lowered or "error" in lowered:
+            return "danger"
+
+        if any(
+            word in lowered
+            for word in (
+                "refreshing",
+                "starting",
+                "checking",
+                "getting",
+                "searching",
+                "updating",
+            )
+        ):
+            return "accent"
+
+        if "cancelled" in lowered or "canceled" in lowered:
+            return "warning"
+
+        if source in {"metadata", "achievements"}:
+            match = re.search(r"(\d[\d,]*)\s*/\s*(\d[\d,]*)", text)
+
+            if match is not None:
+                checked = int(match.group(1).replace(",", ""))
+                total = int(match.group(2).replace(",", ""))
+
+                return "positive" if total > 0 and checked >= total else "warning"
+
+        if source == "hltb":
+            review_match = re.search(r"(\d[\d,]*) review", lowered)
+            pending_match = re.search(r"(\d[\d,]*) pending", lowered)
+            review = (
+                int(review_match.group(1).replace(",", ""))
+                if review_match is not None
+                else 0
+            )
+            pending = (
+                int(pending_match.group(1).replace(",", ""))
+                if pending_match is not None
+                else 0
+            )
+
+            return "warning" if review > 0 or pending > 0 else "positive"
+
+        if source == "classification":
+            pending_match = re.search(r"(\d[\d,]*) pending", lowered)
+
+            if "not checked" in lowered:
+                return "warning"
+
+            if pending_match is not None:
+                pending = int(pending_match.group(1).replace(",", ""))
+
+                if pending > 0:
+                    return "warning"
+
+            return "positive"
+
+        if source == "all" and any(
+            word in lowered for word in ("missing", "pending", "stale")
+        ):
+            return "warning"
+
+        return "positive"
 
     def set_status(
         self,
@@ -451,6 +526,11 @@ class MaintenanceTab(QWidget):
 
         if label is not None:
             label.setText(text)
+            set_dynamic_property(
+                label,
+                "status",
+                self._status_tone(source, text),
+            )
 
     def set_progress(
         self,
@@ -478,6 +558,8 @@ class MaintenanceTab(QWidget):
         if not visible:
             return
 
+        set_dynamic_property(bar, "tone", "accent")
+
         if source in {
             "library",
             "classification",
@@ -501,6 +583,11 @@ class MaintenanceTab(QWidget):
 
         self.view_failures_button.setVisible(available)
         self.view_failures_button.setEnabled(available)
+        set_dynamic_property(
+            self.view_failures_button,
+            "role",
+            "danger" if available else "",
+        )
 
         self.view_failures_button.setText(
             f"View Failures ({count})" if available else "View Failures"
@@ -542,7 +629,6 @@ class MaintenanceTab(QWidget):
         self.change_steam_id_button.setEnabled(enabled)
 
         self.change_api_key_button.setEnabled(enabled)
-
         self.remove_api_key_button.setEnabled(enabled and self._api_key_configured)
 
         self.reset_database_button.setEnabled(enabled)

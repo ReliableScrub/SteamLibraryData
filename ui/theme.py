@@ -19,6 +19,8 @@ DARK_COLORS = {
     "disabled_bg": "#20262d",
     "disabled_text": "#687482",
     "positive": "#78d49a",
+    "positive_bg": "#1d382b",
+    "warning_bg": "#3b321f",
     "danger": "#e4737b",
     "danger_bg": "#472a2e",
     "danger_hover": "#603238",
@@ -43,6 +45,8 @@ LIGHT_COLORS = {
     "disabled_bg": "#d5dce2",
     "disabled_text": "#7f8c97",
     "positive": "#247b47",
+    "positive_bg": "#d9ecdf",
+    "warning_bg": "#eee3c8",
     "danger": "#a93d48",
     "danger_bg": "#ecd5d8",
     "danger_hover": "#e1bec2",
@@ -114,7 +118,7 @@ QPushButton:pressed {
 }
 
 QPushButton:focus {
-    border-color: @ACCENT@;
+    border-color: @ACCENT_HOVER@;
 }
 
 QPushButton:disabled {
@@ -138,6 +142,20 @@ QPushButton[role="primary"]:hover {
 QPushButton[role="primary"]:pressed {
     background-color: @ACCENT_PRESSED@;
     border-color: @ACCENT_PRESSED@;
+}
+
+
+QPushButton[role="warning"] {
+    color: @WARNING@;
+    background-color: @WARNING_BG@;
+    border-color: @WARNING@;
+    font-weight: 600;
+}
+
+QPushButton[role="warning"]:hover {
+    color: @TEXT@;
+    background-color: @SURFACE_HOVER@;
+    border-color: @WARNING@;
 }
 
 QPushButton[role="danger"] {
@@ -407,6 +425,98 @@ QMenu::item {
 QMenu::item:selected {
     background-color: @SELECTION@;
 }
+
+
+QLabel[badge="true"] {
+    border: 1px solid @BORDER_STRONG@;
+    border-radius: 10px;
+    padding: 3px 8px;
+    font-weight: 700;
+}
+
+QLabel[badge="true"][badgeTone="neutral"] {
+    color: @TEXT@;
+    background-color: @SURFACE_ALT@;
+    border-color: @BORDER_STRONG@;
+}
+
+QLabel[badge="true"][badgeTone="accent"] {
+    color: @ACCENT_HOVER@;
+    background-color: @ACCENT_SOFT@;
+    border-color: @ACCENT@;
+}
+
+QLabel[badge="true"][badgeTone="positive"] {
+    color: @POSITIVE@;
+    background-color: @POSITIVE_BG@;
+    border-color: @POSITIVE@;
+}
+
+QLabel[badge="true"][badgeTone="warning"] {
+    color: @WARNING@;
+    background-color: @WARNING_BG@;
+    border-color: @WARNING@;
+}
+
+QLabel[badge="true"][badgeTone="danger"] {
+    color: @DANGER@;
+    background-color: @DANGER_BG@;
+    border-color: @DANGER@;
+}
+
+QFrame[statTile="true"] {
+    background-color: @SURFACE_ALT@;
+    border: 1px solid @BORDER@;
+    border-radius: 7px;
+}
+
+QLabel[statLabel="true"] {
+    color: @MUTED@;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+QLabel[statValue="true"] {
+    color: @TEXT@;
+    font-size: 13pt;
+    font-weight: 700;
+}
+
+QLabel[sectionHeading="true"] {
+    color: @ACCENT_HOVER@;
+    border-left: 3px solid @ACCENT@;
+    padding-left: 7px;
+    margin-top: 5px;
+    font-size: 11pt;
+    font-weight: 700;
+}
+
+QLabel[emptyState="true"] {
+    color: @MUTED@;
+    font-size: 12pt;
+    font-weight: 600;
+}
+
+QLabel[context="muted"] {
+    color: @MUTED@;
+}
+
+QProgressBar[tone="positive"]::chunk {
+    background-color: @POSITIVE@;
+}
+
+QProgressBar[tone="warning"]::chunk {
+    background-color: @WARNING@;
+}
+
+QProgressBar[tone="danger"]::chunk {
+    background-color: @DANGER@;
+}
+
+QProgressBar[tone="accent"]::chunk {
+    background-color: @ACCENT@;
+}
+
 
 QLabel[status="positive"] {
     color: @POSITIVE@;

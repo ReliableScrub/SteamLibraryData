@@ -1077,7 +1077,7 @@ def remember_candidates(
     results,
     query,
 ):
-    for result in results[:5]:
+    for result in results[:10]:
         candidate = serialize_candidate(
             result,
             query,
@@ -1103,7 +1103,7 @@ def print_candidates(
     query,
     results,
 ):
-    candidate_names = [result.game_name for result in results[:5]]
+    candidate_names = [result.game_name for result in results[:10]]
 
     print(f"{prefix} for {query}: {candidate_names}")
 
@@ -1244,7 +1244,7 @@ def discover_hltb_candidates(
         remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(result, query) for result in results[:5]
+            serialize_candidate(result, query) for result in results[:10]
         ]
 
         steam_match = find_steam_verified_candidate(
@@ -1293,7 +1293,7 @@ def discover_hltb_candidates(
         remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(result, query) for result in results[:5]
+            serialize_candidate(result, query) for result in results[:10]
         ]
 
         steam_match = find_steam_verified_candidate(

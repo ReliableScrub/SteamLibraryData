@@ -11,10 +11,11 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QThreadPool,
+    QTimer,
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -43,6 +45,7 @@ from recommendations.persistence import (
 from recommendations.similar import SimilarGameIndex
 from storage.image_cache import get_cached_image_path, get_game_image
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.semantic_widgets import BadgeLabel, SectionHeading, StatTile
 from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 from workers import RecommendationBuildWorker
@@ -124,6 +127,7 @@ class RecommendationsTab(QWidget):
 
         self._populate_reference_games()
         self.refresh()
+        QTimer.singleShot(0, self._update_media_sizes)
 
     def _create_controls(self):
         self.type_filter = QComboBox()
@@ -225,8 +229,30 @@ class RecommendationsTab(QWidget):
         self.for_you_title.setStyleSheet("font-size: 17pt; font-weight: bold;")
 
         self.for_you_summary = QLabel("")
-        self.for_you_summary.setWordWrap(True)
-        self.for_you_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.for_you_summary.setVisible(False)
+
+        self.for_you_match_badge = BadgeLabel("TOP PICK", tone="accent")
+        self.for_you_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.for_you_status_badge = BadgeLabel("", tone="neutral")
+        self.for_you_type_badge = BadgeLabel("", tone="neutral")
+        self.for_you_reception_badge = BadgeLabel("", tone="neutral")
+
+        self.for_you_about_heading = SectionHeading("ABOUT")
+        self.for_you_description = QLabel("")
+        self.for_you_description.setWordWrap(True)
+        self.for_you_description.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        self.for_you_glance_heading = SectionHeading("AT A GLANCE")
+        self.for_you_stats = {
+            "playtime": StatTile("Steam Playtime"),
+            "main": StatTile("Main Story"),
+            "main_extra": StatTile("Main + Extra"),
+            "completionist": StatTile("Completionist"),
+            "achievements": StatTile("Achievements"),
+            "last_played": StatTile("Last Played"),
+        }
 
         self.for_you_details = QTextBrowser()
         self._style_details_browser(self.for_you_details)
@@ -282,8 +308,34 @@ class RecommendationsTab(QWidget):
         self.similar_title.setStyleSheet("font-size: 17pt; font-weight: bold;")
 
         self.similar_summary = QLabel("")
-        self.similar_summary.setWordWrap(True)
-        self.similar_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.similar_summary.setVisible(False)
+
+        self.similar_match_badge = BadgeLabel("SIMILARITY", tone="accent")
+        self.similar_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.similar_status_badge = BadgeLabel("", tone="neutral")
+        self.similar_type_badge = BadgeLabel("", tone="neutral")
+        self.similar_reception_badge = BadgeLabel("", tone="neutral")
+
+        self.similar_context_label = QLabel("")
+        self.similar_context_label.setProperty("context", "muted")
+        self.similar_context_label.setWordWrap(True)
+
+        self.similar_about_heading = SectionHeading("ABOUT")
+        self.similar_description = QLabel("")
+        self.similar_description.setWordWrap(True)
+        self.similar_description.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        self.similar_glance_heading = SectionHeading("AT A GLANCE")
+        self.similar_stats = {
+            "playtime": StatTile("Steam Playtime"),
+            "main": StatTile("Main Story"),
+            "main_extra": StatTile("Main + Extra"),
+            "completionist": StatTile("Completionist"),
+            "achievements": StatTile("Achievements"),
+            "last_played": StatTile("Last Played"),
+        }
 
         self.similar_details = QTextBrowser()
         self._style_details_browser(self.similar_details)
@@ -300,10 +352,17 @@ class RecommendationsTab(QWidget):
         font = browser.font()
         font.setPointSize(11)
         browser.setFont(font)
+        RecommendationsTab._refresh_details_browser_style(browser)
+
+    @staticmethod
+    def _refresh_details_browser_style(browser):
+        accent = browser.palette().color(QPalette.ColorRole.Highlight).name()
+        muted = browser.palette().color(QPalette.ColorRole.PlaceholderText).name()
 
         browser.document().setDefaultStyleSheet(
-            "h3 { margin-top: 14px; margin-bottom: 4px; }"
+            f"h3 {{ color: {accent}; margin-top: 14px; margin-bottom: 5px; }}"
             "p { margin-top: 3px; margin-bottom: 10px; }"
+            f".muted {{ color: {muted}; }}"
         )
 
     @staticmethod
@@ -460,7 +519,44 @@ class RecommendationsTab(QWidget):
         right_layout = QVBoxLayout(right_panel)
 
         right_layout.addWidget(self.for_you_title)
-        right_layout.addWidget(self.for_you_summary)
+
+        primary_badges = QHBoxLayout()
+        primary_badges.addWidget(self.for_you_match_badge)
+        primary_badges.addWidget(self.for_you_score_badge)
+        primary_badges.addStretch()
+        right_layout.addLayout(primary_badges)
+
+        secondary_badges = QHBoxLayout()
+        secondary_badges.addWidget(self.for_you_status_badge)
+        secondary_badges.addWidget(self.for_you_type_badge)
+        secondary_badges.addWidget(self.for_you_reception_badge)
+        secondary_badges.addStretch()
+        right_layout.addLayout(secondary_badges)
+
+        right_layout.addWidget(self.for_you_about_heading)
+        right_layout.addWidget(self.for_you_description)
+        right_layout.addWidget(self.for_you_glance_heading)
+
+        stats_grid = QGridLayout()
+        stats_grid.setHorizontalSpacing(8)
+        stats_grid.setVerticalSpacing(8)
+        stat_order = [
+            "playtime",
+            "main",
+            "main_extra",
+            "completionist",
+            "achievements",
+            "last_played",
+        ]
+
+        for index, stat_name in enumerate(stat_order):
+            stats_grid.addWidget(
+                self.for_you_stats[stat_name],
+                index // 3,
+                index % 3,
+            )
+
+        right_layout.addLayout(stats_grid)
         right_layout.addWidget(
             self.for_you_details,
             1,
@@ -556,7 +652,45 @@ class RecommendationsTab(QWidget):
         right_layout = QVBoxLayout(right_panel)
 
         right_layout.addWidget(self.similar_title)
-        right_layout.addWidget(self.similar_summary)
+
+        primary_badges = QHBoxLayout()
+        primary_badges.addWidget(self.similar_match_badge)
+        primary_badges.addWidget(self.similar_score_badge)
+        primary_badges.addStretch()
+        right_layout.addLayout(primary_badges)
+
+        secondary_badges = QHBoxLayout()
+        secondary_badges.addWidget(self.similar_status_badge)
+        secondary_badges.addWidget(self.similar_type_badge)
+        secondary_badges.addWidget(self.similar_reception_badge)
+        secondary_badges.addStretch()
+        right_layout.addLayout(secondary_badges)
+
+        right_layout.addWidget(self.similar_context_label)
+        right_layout.addWidget(self.similar_about_heading)
+        right_layout.addWidget(self.similar_description)
+        right_layout.addWidget(self.similar_glance_heading)
+
+        stats_grid = QGridLayout()
+        stats_grid.setHorizontalSpacing(8)
+        stats_grid.setVerticalSpacing(8)
+        stat_order = [
+            "playtime",
+            "main",
+            "main_extra",
+            "completionist",
+            "achievements",
+            "last_played",
+        ]
+
+        for index, stat_name in enumerate(stat_order):
+            stats_grid.addWidget(
+                self.similar_stats[stat_name],
+                index // 3,
+                index % 3,
+            )
+
+        right_layout.addLayout(stats_grid)
         right_layout.addWidget(
             self.similar_details,
             1,
@@ -602,6 +736,11 @@ class RecommendationsTab(QWidget):
         self.for_you_next_button.clicked.connect(self.next_for_you)
 
         self.find_similar_button.clicked.connect(self.find_similar_games)
+
+        reference_line_edit = self.reference_combo.lineEdit()
+
+        if reference_line_edit is not None:
+            reference_line_edit.returnPressed.connect(self._reference_return_pressed)
 
         self.similar_result_combo.currentIndexChanged.connect(
             self._similar_result_changed
@@ -1114,6 +1253,74 @@ class RecommendationsTab(QWidget):
         self.description_requests_in_flight.discard(app_id)
 
     @staticmethod
+    def _description_text(game):
+        description = game.steam_short_description
+
+        if description is None:
+            return "Loading Steam description..."
+
+        if not description:
+            return "No Steam description is available."
+
+        return description
+
+    @staticmethod
+    def _status_badge_tone(status):
+        tones = {
+            "Backlog": "accent",
+            "Playing": "accent",
+            "Completed": "positive",
+            "On Hold": "warning",
+            "Dropped": "danger",
+            "Inactive": "neutral",
+        }
+
+        return tones.get(status, "neutral")
+
+    @staticmethod
+    def _reception_badge(game):
+        positive = game.steamspy_positive
+        negative = game.steamspy_negative
+
+        if positive is None or negative is None:
+            return "RECEPTION UNKNOWN", "neutral"
+
+        total = positive + negative
+
+        if total == 0:
+            return "NO REVIEWS", "neutral"
+
+        percent = positive / total * 100
+
+        if total < PUBLIC_RECEPTION_MIN_REVIEWS:
+            tone = "warning"
+        elif percent >= 80:
+            tone = "positive"
+        elif percent >= 60:
+            tone = "accent"
+        elif percent >= 45:
+            tone = "warning"
+        else:
+            tone = "danger"
+
+        return f"{percent:.0f}% POSITIVE", tone
+
+    def _update_stat_tiles(self, tiles, game):
+        playtime_hours = (game.playtime_minutes or 0) / 60
+
+        values = {
+            "playtime": f"{playtime_hours:.1f} h",
+            "main": self._format_hours(game.hltb_main),
+            "main_extra": self._format_hours(game.hltb_main_extra),
+            "completionist": self._format_hours(game.hltb_completionist),
+            "achievements": self._achievement_text(game),
+            "last_played": self._last_played_text(game),
+        }
+
+        for name, value in values.items():
+            tiles[name].set_value(value)
+
+    @staticmethod
     def _description_html(game):
         description = game.steam_short_description
 
@@ -1171,29 +1378,30 @@ class RecommendationsTab(QWidget):
 
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
         reception_text = self._public_reception_text(game)
+        reception_badge, reception_tone = self._reception_badge(game)
         match_label = self._recommendation_match_label(record)
         score_text = self._friendly_score(record["score"])
-        playtime_hours = (game.playtime_minutes or 0) / 60
-        play_state = (
-            "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+        status = game.effective_status()
+
+        self.for_you_match_badge.set_badge(match_label.upper(), "accent")
+        self.for_you_score_badge.set_badge(
+            f"{score_text} MATCH",
+            "accent",
+            f"Exact recommendation score: {record['score']:.4f}",
+        )
+        self.for_you_status_badge.set_badge(
+            status.upper(),
+            self._status_badge_tone(status),
+        )
+        self.for_you_type_badge.set_badge(steam_type_text.upper(), "neutral")
+        self.for_you_reception_badge.set_badge(
+            reception_badge,
+            reception_tone,
+            reception_text,
         )
 
-        self.for_you_summary.setText(
-            "<div>"
-            f"<span style='font-size: 15pt; font-weight: 700;'>"
-            f"{html.escape(match_label.upper())}</span>"
-            f"<span style='font-size: 19pt; font-weight: 700;'>"
-            f" · {html.escape(score_text)} MATCH</span><br>"
-            f"<span style='font-size: 11pt;'>"
-            f"{html.escape(game.effective_status())} · {html.escape(play_state)}</span><br>"
-            f"<span style='font-size: 11pt;'>Public Reception: "
-            f"{html.escape(reception_text)} · Steam Type: "
-            f"{html.escape(steam_type_text)}</span>"
-            "</div>"
-        )
-        self.for_you_summary.setToolTip(
-            f"Exact recommendation score: {record['score']:.4f}"
-        )
+        self.for_you_description.setText(self._description_text(game))
+        self._update_stat_tiles(self.for_you_stats, game)
 
         explanation = self._explanation_for(record)
         self.for_you_details.setHtml(
@@ -1204,30 +1412,30 @@ class RecommendationsTab(QWidget):
         self.similar_title.setText(game.name)
         steam_type_text = self.genre_tag_filter.display_steam_type(game)
         reception_text = self._public_reception_text(game)
+        reception_badge, reception_tone = self._reception_badge(game)
         similarity_label = self._similarity_match_label(score.adjusted_similarity)
         similarity_text = self._friendly_score(score.adjusted_similarity)
-        playtime_hours = (game.playtime_minutes or 0) / 60
-        play_state = (
-            "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
-        )
+        status = game.effective_status()
 
-        self.similar_summary.setText(
-            "<div>"
-            f"<span style='font-size: 15pt; font-weight: 700;'>"
-            f"{html.escape(similarity_label.upper())}</span>"
-            f"<span style='font-size: 19pt; font-weight: 700;'>"
-            f" · {html.escape(similarity_text)} MATCH</span><br>"
-            f"<span style='font-size: 11pt;'>"
-            f"{html.escape(game.effective_status())} · {html.escape(play_state)}</span><br>"
-            f"<span style='font-size: 11pt;'>Similar to "
-            f"{html.escape(reference_name)} · Public Reception: "
-            f"{html.escape(reception_text)} · Steam Type: "
-            f"{html.escape(steam_type_text)}</span>"
-            "</div>"
+        self.similar_match_badge.set_badge(similarity_label.upper(), "accent")
+        self.similar_score_badge.set_badge(
+            f"{similarity_text} MATCH",
+            "accent",
+            f"Exact adjusted similarity: {score.adjusted_similarity:.4f}",
         )
-        self.similar_summary.setToolTip(
-            f"Exact adjusted similarity: {score.adjusted_similarity:.4f}"
+        self.similar_status_badge.set_badge(
+            status.upper(),
+            self._status_badge_tone(status),
         )
+        self.similar_type_badge.set_badge(steam_type_text.upper(), "neutral")
+        self.similar_reception_badge.set_badge(
+            reception_badge,
+            reception_tone,
+            reception_text,
+        )
+        self.similar_context_label.setText(f"Similar to {reference_name}")
+        self.similar_description.setText(self._description_text(game))
+        self._update_stat_tiles(self.similar_stats, game)
 
         shared_traits = [html.escape(name) for name in score.shared_traits]
         genres = [html.escape(genre) for genre in (game.genres or [])]
@@ -1239,10 +1447,6 @@ class RecommendationsTab(QWidget):
         tag_names = [html.escape(tag) for tag, _weight in sorted_tags[:10]]
 
         detail_parts = [
-            "<h3>About</h3>",
-            self._description_html(game),
-            "<h3>At a glance</h3>",
-            self._at_a_glance_html(game),
             "<h3>Why it's similar</h3>",
             f"<p><b>Shared feature count:</b> {score.shared_feature_count}</p>",
         ]
@@ -1332,9 +1536,17 @@ class RecommendationsTab(QWidget):
         self.for_you_position_label.setText("0 of 0")
 
         self.for_you_title.setText(title)
+        self.for_you_match_badge.set_badge("TOP PICK", "neutral")
+        self.for_you_score_badge.set_badge("— MATCH", "neutral")
+        self.for_you_status_badge.set_badge("NO SELECTION", "neutral")
+        self.for_you_type_badge.set_badge("—", "neutral")
+        self.for_you_reception_badge.set_badge("—", "neutral")
+        self.for_you_description.setText(message)
 
-        self.for_you_summary.setText("")
-        self.for_you_details.setPlainText(message)
+        for tile in self.for_you_stats.values():
+            tile.set_value("—")
+
+        self.for_you_details.clear()
 
     def previous_for_you(self):
         if len(self.for_you_records) <= 1:
@@ -1518,10 +1730,6 @@ class RecommendationsTab(QWidget):
         explanation,
     ):
         parts = [
-            "<h3>About</h3>",
-            self._description_html(game),
-            "<h3>At a glance</h3>",
-            self._at_a_glance_html(game),
             "<h3>Why it fits</h3>",
         ]
 
@@ -1657,6 +1865,24 @@ class RecommendationsTab(QWidget):
             self.reference_combo.setEditText("")
 
         self.reference_combo.blockSignals(False)
+
+    def _reference_return_pressed(self):
+        reference_app_id = self._selected_reference_app_id()
+
+        if reference_app_id is None:
+            typed_name = self.reference_combo.currentText().strip().casefold()
+
+            matches = [
+                index
+                for index in range(self.reference_combo.count())
+                if self.reference_combo.itemText(index).rsplit(" (", 1)[0].casefold()
+                == typed_name
+            ]
+
+            if len(matches) == 1:
+                self.reference_combo.setCurrentIndex(matches[0])
+
+        self.find_similar_games()
 
     def find_similar_games(self):
         reference_app_id = self._selected_reference_app_id()
@@ -1916,8 +2142,18 @@ class RecommendationsTab(QWidget):
         self.similar_hltb.setText(self._empty_hltb_text())
 
         self.similar_title.setText(title)
-        self.similar_summary.setText("")
-        self.similar_details.setPlainText(message)
+        self.similar_match_badge.set_badge("SIMILARITY", "neutral")
+        self.similar_score_badge.set_badge("— MATCH", "neutral")
+        self.similar_status_badge.set_badge("NO SELECTION", "neutral")
+        self.similar_type_badge.set_badge("—", "neutral")
+        self.similar_reception_badge.set_badge("—", "neutral")
+        self.similar_context_label.setText("")
+        self.similar_description.setText(message)
+
+        for tile in self.similar_stats.values():
+            tile.set_value("—")
+
+        self.similar_details.clear()
 
         self.similar_steam_button.setEnabled(False)
         self.similar_trailer_player.clear_game()
@@ -2054,6 +2290,10 @@ class RecommendationsTab(QWidget):
 
         label.setProperty("image_path", image_path)
         self._rescale_image_label(label, pixmap)
+        QTimer.singleShot(
+            0,
+            lambda target=label: self._rescale_image_label(target),
+        )
 
     def _rescale_image_label(self, label, pixmap=None):
         if pixmap is None:
@@ -2157,12 +2397,20 @@ class RecommendationsTab(QWidget):
             browser.setFont(font)
 
     def refresh_theme(self):
+        for browser in (self.for_you_details, self.similar_details):
+            self._refresh_details_browser_style(browser)
+
         for panel in (self.for_you_left_panel, self.similar_left_panel):
             panel.style().unpolish(panel)
             panel.style().polish(panel)
             panel.update()
 
         self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._update_media_sizes)
+        QTimer.singleShot(0, self._update_responsive_typography)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
