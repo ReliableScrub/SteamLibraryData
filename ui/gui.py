@@ -1,7 +1,7 @@
 import sys
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QPalette
+from PySide6.QtGui import QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QStyleFactory,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -44,6 +43,7 @@ from storage.settings import (
 from ui.library_tab import LibraryTab
 from ui.maintenance_tab import MaintenanceTab
 from ui.recommendations_tab import RecommendationsTab
+from ui.theme import apply_theme
 from ui.update_controller import UpdateController
 from ui.window_state import restore_window_state, save_window_state
 
@@ -58,51 +58,12 @@ def open_external_url(url):
 
 
 def apply_application_theme(app, appearance, system_style_name, system_palette):
-    if appearance == "System":
-        system_style = QStyleFactory.create(system_style_name)
-
-        if system_style is not None:
-            app.setStyle(system_style)
-
-        app.setPalette(system_palette)
-        return
-
-    app.setStyle("Fusion")
-
-    if appearance == "Light":
-        palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
-        palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
-        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
-        palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
-        palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
-        palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
-        palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
-        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-
-        app.setPalette(palette)
-        return
-
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(37, 37, 38))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(235, 235, 235))
-    palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 48))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 48))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(235, 235, 235))
-    palette.setColor(QPalette.ColorRole.Text, QColor(235, 235, 235))
-    palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 48))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(235, 235, 235))
-    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 80, 80))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(150, 150, 150))
-
-    app.setPalette(palette)
+    apply_theme(
+        app,
+        appearance,
+        system_style_name,
+        system_palette,
+    )
 
 
 class MainWindow(QMainWindow):
@@ -115,6 +76,8 @@ class MainWindow(QMainWindow):
         system_palette,
     ):
         super().__init__()
+
+        self.setObjectName("mainWindow")
 
         self.games = games
         self.steam_api_key = steam_api_key
@@ -237,6 +200,7 @@ class MainWindow(QMainWindow):
 
     def _create_tabs(self):
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("mainTabs")
         self.library_tab = LibraryTab(self.games, self)
         self.recommendations_tab = RecommendationsTab(self.games, self)
         self.maintenance_tab = MaintenanceTab(
@@ -247,6 +211,10 @@ class MainWindow(QMainWindow):
         )
 
         self.contact_tab = self._create_contact_tab()
+
+        self.maintenance_tab.update_all_button.setProperty("role", "primary")
+        self.maintenance_tab.reset_database_button.setProperty("role", "danger")
+        self.maintenance_tab.remove_api_key_button.setProperty("role", "danger")
 
         self.tabs.addTab(self.library_tab, "Library")
         self.tabs.addTab(self.recommendations_tab, "Recommendations")

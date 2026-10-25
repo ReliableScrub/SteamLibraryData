@@ -119,8 +119,7 @@ def _cosine(left, right):
         return 0.0
 
     dot_product = sum(
-        value * right_items.get(key, 0.0)
-        for key, value in left_items.items()
+        value * right_items.get(key, 0.0) for key, value in left_items.items()
     )
 
     return dot_product / (left_norm * right_norm)
@@ -185,7 +184,7 @@ def _feature_contributions(
     )
 
     if feature_limit is not None:
-        ordered = ordered[:max(0, int(feature_limit))]
+        ordered = ordered[: max(0, int(feature_limit))]
 
     source_order = {"genre": 0, "tag": 1}
     features = []
@@ -211,14 +210,10 @@ def _feature_contributions(
 
 def _shared_feature_count(candidate_vector, reference_vector):
     candidate_features = {
-        key
-        for key, value in _vector_items(candidate_vector)
-        if value != 0.0
+        key for key, value in _vector_items(candidate_vector) if value != 0.0
     }
     reference_features = {
-        key
-        for key, value in _vector_items(reference_vector)
-        if value != 0.0
+        key for key, value in _vector_items(reference_vector) if value != 0.0
     }
 
     return len(candidate_features & reference_features)
@@ -246,7 +241,6 @@ def _feedback_weight_for_game(game):
         return 0.0
 
     return float(feedback.score) * float(feedback.confidence)
-
 
 
 def _neighbors_for_score(score):

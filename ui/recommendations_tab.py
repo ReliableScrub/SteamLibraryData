@@ -14,8 +14,9 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QComboBox,
     QCompleter,
     QDoubleSpinBox,
@@ -158,6 +159,7 @@ class RecommendationsTab(QWidget):
         self.hltb_min_filter.setRange(0, 10000)
         self.hltb_min_filter.setDecimals(1)
         self.hltb_min_filter.setSingleStep(0.5)
+        self.hltb_min_filter.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         self.hltb_min_filter.setSpecialValueText("Min")
         self.hltb_min_filter.setSuffix(" h")
 
@@ -165,6 +167,7 @@ class RecommendationsTab(QWidget):
         self.hltb_max_filter.setRange(0, 10000)
         self.hltb_max_filter.setDecimals(1)
         self.hltb_max_filter.setSingleStep(0.5)
+        self.hltb_max_filter.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         self.hltb_max_filter.setSpecialValueText("Max")
         self.hltb_max_filter.setSuffix(" h")
 
@@ -289,21 +292,11 @@ class RecommendationsTab(QWidget):
     def _style_media_panel(panel):
         panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel.setObjectName("recommendationMediaPanel")
-
-        palette = panel.palette()
-        border_color = palette.color(QPalette.ColorRole.Mid).name()
-        background_color = palette.color(QPalette.ColorRole.Base).name()
-
-        panel.setStyleSheet(
-            "#recommendationMediaPanel {"
-            f" border: 1px solid {border_color};"
-            " border-radius: 8px;"
-            f" background-color: {background_color};"
-            "}"
-        )
+        panel.setProperty("card", True)
 
     @staticmethod
     def _style_details_browser(browser):
+        browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         font = browser.font()
         font.setPointSize(11)
         browser.setFont(font)
@@ -425,7 +418,7 @@ class RecommendationsTab(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.for_you_left_panel.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.for_you_left_panel.setMinimumWidth(500)
         self.for_you_left_panel.setMaximumWidth(860)
@@ -530,7 +523,7 @@ class RecommendationsTab(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.similar_left_panel.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.similar_left_panel.setMinimumWidth(500)
         self.similar_left_panel.setMaximumWidth(860)
@@ -1140,9 +1133,7 @@ class RecommendationsTab(QWidget):
             return "Never"
 
         return (
-            datetime.fromtimestamp(timestamp, tz=UTC)
-            .astimezone()
-            .strftime("%b %d, %Y")
+            datetime.fromtimestamp(timestamp, tz=UTC).astimezone().strftime("%b %d, %Y")
         )
 
     @staticmethod
@@ -1183,7 +1174,9 @@ class RecommendationsTab(QWidget):
         match_label = self._recommendation_match_label(record)
         score_text = self._friendly_score(record["score"])
         playtime_hours = (game.playtime_minutes or 0) / 60
-        play_state = "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+        play_state = (
+            "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+        )
 
         self.for_you_summary.setText(
             "<div>"
@@ -1214,7 +1207,9 @@ class RecommendationsTab(QWidget):
         similarity_label = self._similarity_match_label(score.adjusted_similarity)
         similarity_text = self._friendly_score(score.adjusted_similarity)
         playtime_hours = (game.playtime_minutes or 0) / 60
-        play_state = "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+        play_state = (
+            "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+        )
 
         self.similar_summary.setText(
             "<div>"
@@ -2160,6 +2155,14 @@ class RecommendationsTab(QWidget):
             font = browser.font()
             font.setPointSize(detail_size)
             browser.setFont(font)
+
+    def refresh_theme(self):
+        for panel in (self.for_you_left_panel, self.similar_left_panel):
+            panel.style().unpolish(panel)
+            panel.style().polish(panel)
+            panel.update()
+
+        self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

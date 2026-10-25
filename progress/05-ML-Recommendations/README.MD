@@ -4,6 +4,11 @@ Phase 5 adds local personalized recommendations for games already present in the
 
 The production recommender is a hybrid content-based system built from Steam genres, SteamSpy tags, user feedback, and local K-Means taste clustering. For smaller recommendation histories, it automatically falls back to a simpler content-based model.
 
+<p align="center">
+  <img src="Library.JPG" alt="Library" width="32%">  <img src="Recommendations.JPG" alt="Recommendations" width="32%">
+  <img src="Maintenance.JPG" alt="Maintenance" width="32%">
+</p>
+
 ## Completed
 
 - Added persistent 1-5 star enjoyment ratings

@@ -16,6 +16,7 @@ def _raise_if_cancelled(cancel_requested):
     if cancel_requested is not None and cancel_requested():
         raise HLTBDetailCancelled()
 
+
 HLTB_PAGE_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 "

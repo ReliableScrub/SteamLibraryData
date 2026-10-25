@@ -327,18 +327,14 @@ class UpdateController(QObject):
             or not game.metadata_checked
             or (
                 game.is_backlog_eligible()
-                and (
-                    not game.hltb_checked
-                    or not game.achievements_checked
-                )
+                and (not game.hltb_checked or not game.achievements_checked)
             )
             for game in self.games
         )
 
     def missing_data_needs_steam_id(self):
         return any(
-            not game.achievements_checked
-            and game.is_backlog_eligible()
+            not game.achievements_checked and game.is_backlog_eligible()
             for game in self.games
         )
 
@@ -357,7 +353,7 @@ class UpdateController(QObject):
         if limit is None:
             return ordered
 
-        return ordered[:max(int(limit), 0)]
+        return ordered[: max(int(limit), 0)]
 
     @staticmethod
     def _oldest_age_text(games, timestamp_attr):
@@ -534,19 +530,11 @@ class UpdateController(QObject):
         eligible_games = [game for game in self.games if game.is_backlog_eligible()]
 
         matched = sum(
-            1
-            for game in eligible_games
-            if game.hltb_match_status == "matched"
+            1 for game in eligible_games if game.hltb_match_status == "matched"
         )
-        review = sum(
-            1
-            for game in eligible_games
-            if game.hltb_match_status == "review"
-        )
+        review = sum(1 for game in eligible_games if game.hltb_match_status == "review")
         no_match = sum(
-            1
-            for game in eligible_games
-            if game.hltb_match_status == "no_match"
+            1 for game in eligible_games if game.hltb_match_status == "no_match"
         )
         hltb_pending = sum(1 for game in eligible_games if not game.hltb_checked)
         hltb_oldest = self._oldest_age_text(
@@ -573,9 +561,7 @@ class UpdateController(QObject):
         )
 
         achievement_checked = sum(
-            1
-            for game in eligible_games
-            if game.achievements_checked
+            1 for game in eligible_games if game.achievements_checked
         )
         changed_achievements = self.changed_achievement_count()
 
@@ -995,8 +981,7 @@ class UpdateController(QObject):
         self._cancel_requested = False
 
         needs_classification = any(
-            game.classification_updated_at is None
-            for game in self.games
+            game.classification_updated_at is None for game in self.games
         )
 
         if needs_classification:
@@ -1017,19 +1002,13 @@ class UpdateController(QObject):
         hltb_games = [
             game
             for game in self.games
-            if not game.hltb_checked
-            and game.is_backlog_eligible()
+            if not game.hltb_checked and game.is_backlog_eligible()
         ]
-        metadata_games = [
-            game
-            for game in self.games
-            if not game.metadata_checked
-        ]
+        metadata_games = [game for game in self.games if not game.metadata_checked]
         achievement_games = [
             game
             for game in self.games
-            if not game.achievements_checked
-            and game.is_backlog_eligible()
+            if not game.achievements_checked and game.is_backlog_eligible()
         ]
 
         if not hltb_games and not metadata_games and not achievement_games:
@@ -1042,9 +1021,7 @@ class UpdateController(QObject):
             return "steam_id_required"
 
         self._combined_total = (
-            len(hltb_games)
-            + len(metadata_games)
-            + len(achievement_games)
+            len(hltb_games) + len(metadata_games) + len(achievement_games)
         )
         self._combined_progress = {}
 
@@ -1201,26 +1178,18 @@ class UpdateController(QObject):
         self.refresh_statuses()
 
         remaining = sum(
-            1
-            for game in self.games
-            if game.classification_updated_at is None
+            1 for game in self.games if game.classification_updated_at is None
         )
         remaining += sum(
             1
             for game in self.games
-            if not game.hltb_checked
-            and game.is_backlog_eligible()
+            if not game.hltb_checked and game.is_backlog_eligible()
         )
+        remaining += sum(1 for game in self.games if not game.metadata_checked)
         remaining += sum(
             1
             for game in self.games
-            if not game.metadata_checked
-        )
-        remaining += sum(
-            1
-            for game in self.games
-            if not game.achievements_checked
-            and game.is_backlog_eligible()
+            if not game.achievements_checked and game.is_backlog_eligible()
         )
 
         if was_cancelled:

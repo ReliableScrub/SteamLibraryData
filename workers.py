@@ -42,8 +42,7 @@ class RecommendationBuildWorker(QObject):
 
         except Exception as error:  # noqa: BLE001
             self.failed.emit(
-                "Recommendation rebuild failed. "
-                f"{type(error).__name__}: {error}"
+                f"Recommendation rebuild failed. {type(error).__name__}: {error}"
             )
 
         finally:

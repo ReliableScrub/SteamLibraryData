@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QStyledItemDelegate,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -38,6 +39,13 @@ def canonical_feature_key(name):
     return " ".join(name.split()).casefold()
 
 
+class _CheckListItemDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), 26))
+        return size
+
+
 class _SearchableCheckList(QWidget):
     selection_changed = Signal()
 
@@ -52,6 +60,8 @@ class _SearchableCheckList(QWidget):
         self.search_box.setPlaceholderText("Search...")
 
         self.list_widget = QListWidget()
+        self.list_widget.setUniformItemSizes(False)
+        self.list_widget.setItemDelegate(_CheckListItemDelegate(self.list_widget))
         self.list_widget.itemChanged.connect(self._item_changed)
         self.search_box.textChanged.connect(self._apply_search)
 
@@ -100,6 +110,8 @@ class _SearchableCheckList(QWidget):
                     else Qt.CheckState.Unchecked
                 )
                 self.list_widget.addItem(item)
+
+            self.list_widget.doItemsLayout()
 
         finally:
             self._syncing = False
@@ -207,7 +219,7 @@ class GenreTagFilterWidget(QWidget):
                         display,
                     )
 
-            for tag in (getattr(game, "tags", {}) or {}).keys():
+            for tag in getattr(game, "tags", {}) or {}:
                 display = " ".join(tag.split())
 
                 if display:
@@ -255,7 +267,7 @@ class GenreTagFilterWidget(QWidget):
                     if key in self._software_exclusive_genre_keys:
                         software_genres.setdefault(key, display)
 
-            for tag in (getattr(game, "tags", {}) or {}).keys():
+            for tag in getattr(game, "tags", {}) or {}:
                 display = " ".join(tag.split())
 
                 if display:
@@ -315,7 +327,7 @@ class GenreTagFilterWidget(QWidget):
         }
         tag_keys = {
             canonical_feature_key(tag)
-            for tag in (getattr(game, "tags", {}) or {}).keys()
+            for tag in (getattr(game, "tags", {}) or {})
             if canonical_feature_key(tag)
         }
 
@@ -435,10 +447,7 @@ class GenreTagFilterWidget(QWidget):
             if not selected_software_genre_keys.issubset(genre_keys):
                 return False
 
-        if selected_tag_keys and not selected_tag_keys.issubset(tag_keys):
-            return False
-
-        return True
+        return not (selected_tag_keys and not selected_tag_keys.issubset(tag_keys))
 
     def _open_dialog(self):
         dialog = QDialog(self)

@@ -1,5 +1,6 @@
 from game import Game
 
+
 # Games with HowLongToBeat times
 def games_with_hltb_times(games: list[Game]):
     results = []
@@ -10,8 +11,10 @@ def games_with_hltb_times(games: list[Game]):
 
     return results
 
+
 def sort_by_completion_time(games: list[Game]):
     return sorted(games, key=lambda game: game.preferred_hltb_time())
+
 
 def games_under_hours(games: list[Game], max_hours: float):
     results = []
@@ -24,6 +27,7 @@ def games_under_hours(games: list[Game], max_hours: float):
 
     return results
 
+
 def unplayed_games(games: list[Game]):
     results = []
 
@@ -33,6 +37,7 @@ def unplayed_games(games: list[Game]):
 
     return results
 
+
 def started_games(games: list[Game]):
     results = []
 
@@ -41,6 +46,7 @@ def started_games(games: list[Game]):
             results.append(game)
 
     return results
+
 
 def games_with_achievements(games: list[Game]):
     result = []
@@ -55,9 +61,8 @@ def games_with_achievements(games: list[Game]):
 
     return result
 
+
 def sort_by_achievement_percent(games: list[Game], descending=True):
     return sorted(
-        games,
-        key=lambda game: game.achievement_percent() or 0,
-        reverse=descending
+        games, key=lambda game: game.achievement_percent() or 0, reverse=descending
     )

@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Si
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -254,6 +255,7 @@ class LibraryTab(QWidget):
         self.hltb_min_filter.setRange(0, 10000)
         self.hltb_min_filter.setDecimals(1)
         self.hltb_min_filter.setSingleStep(0.5)
+        self.hltb_min_filter.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         self.hltb_min_filter.setSpecialValueText("Min")
         self.hltb_min_filter.setSuffix(" h")
 
@@ -262,6 +264,7 @@ class LibraryTab(QWidget):
         self.hltb_max_filter.setRange(0, 10000)
         self.hltb_max_filter.setDecimals(1)
         self.hltb_max_filter.setSingleStep(0.5)
+        self.hltb_max_filter.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
         self.hltb_max_filter.setSpecialValueText("Max")
         self.hltb_max_filter.setSuffix(" h")
 
@@ -495,7 +498,7 @@ class LibraryTab(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.details_panel.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
         )
         self.details_panel.setMinimumWidth(320)
 
@@ -1317,6 +1320,9 @@ class LibraryTab(QWidget):
         if game is None:
             return
 
+        self.details_panel.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
         self.trailer_player.set_game(game.app_id)
         self.game_title.setText(game.name)
         self.selected_game = game
@@ -1729,6 +1735,9 @@ class LibraryTab(QWidget):
     def clear_game_details(self):
         self.selected_game = None
 
+        self.details_panel.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
         self.trailer_player.clear_game()
         self.game_title.setText("No game selected")
         self.status_value.setText("No game selected")

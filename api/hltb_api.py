@@ -1244,8 +1244,7 @@ def discover_hltb_candidates(
         remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(result, query)
-            for result in results[:5]
+            serialize_candidate(result, query) for result in results[:5]
         ]
 
         steam_match = find_steam_verified_candidate(
@@ -1294,8 +1293,7 @@ def discover_hltb_candidates(
         remember_candidates(review_candidates, results, query)
 
         current_candidates = [
-            serialize_candidate(result, query)
-            for result in results[:5]
+            serialize_candidate(result, query) for result in results[:5]
         ]
 
         steam_match = find_steam_verified_candidate(

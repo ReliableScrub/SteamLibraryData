@@ -68,10 +68,10 @@ def set_library_view_settings(library_view):
 
 def get_appearance():
     settings = load_settings()
-    appearance = settings.get("appearance", "System")
+    appearance = settings.get("appearance", "Dark")
 
     if appearance not in VALID_APPEARANCES:
-        return "System"
+        return "Dark"
 
     return appearance
 
