@@ -94,6 +94,9 @@ class GameTableModel(QAbstractTableModel):
             if game.classification_updated_at is None:
                 return "Not Checked"
 
+            if self.steam_type_resolver is not None:
+                return self.steam_type_resolver(game)
+
             steam_type_names = {
                 "game": "Game",
                 "software": "Software",
@@ -103,24 +106,7 @@ class GameTableModel(QAbstractTableModel):
                 "unknown": "Unknown",
             }
 
-            if self.steam_type_resolver is None:
-                return steam_type_names.get(
-                    game.steam_type,
-                    "Unknown",
-                )
-
-            inferred_type = self.steam_type_resolver(game)
-
-            if game.steam_type == "unknown" and inferred_type == "game":
-                return "Unknown (Game)"
-
-            if game.steam_type == "unknown" and inferred_type == "software":
-                return "Unknown (Software)"
-
-            return steam_type_names.get(
-                game.steam_type,
-                "Unknown",
-            )
+            return steam_type_names.get(game.steam_type, "Unknown")
 
         return None
 

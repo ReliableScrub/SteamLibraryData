@@ -47,6 +47,7 @@ from storage.settings import (
 )
 from ui.game_table_model import GameTableModel
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 
 
@@ -203,6 +204,7 @@ class LibraryTab(QWidget):
         self._selected_refresh_controller = SelectedGameRefreshController(self)
         self._selected_refresh_busy = False
         self._global_update_busy = False
+        self.description_requests_in_flight = set()
 
         self._create_filter_controls()
         self._create_table()
@@ -1079,7 +1081,8 @@ class LibraryTab(QWidget):
             filtered_games = [
                 game
                 for game in filtered_games
-                if game.effective_status() == "Backlog" and game.is_backlog_eligible()
+                if game.effective_status() == "Backlog"
+                and self.genre_tag_filter.is_backlog_eligible(game)
             ]
 
         elif selected_status != "All":
@@ -1203,20 +1206,49 @@ class LibraryTab(QWidget):
 
         return text
 
-    def show_selected_game(self):
-        row = self.table.currentIndex().row()
+    @staticmethod
+    def _description_text(game):
+        description = game.steam_short_description
 
-        if row < 0:
+        if description is None:
+            return "Loading Steam description..."
+
+        if not description:
+            return "No Steam description is available."
+
+        return description
+
+    def _request_short_description(self, game):
+        if game.steam_short_description is not None:
             return
 
-        game = self.game_table_model.game_at(row)
+        if game.app_id in self.description_requests_in_flight:
+            return
+
+        self.description_requests_in_flight.add(game.app_id)
+
+        worker = StoreDescriptionWorker(game.app_id)
+        worker.signals.loaded.connect(self._short_description_loaded)
+        worker.signals.failed.connect(self._short_description_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _short_description_loaded(self, app_id, description):
+        self.description_requests_in_flight.discard(app_id)
+
+        game = next((item for item in self.games if item.app_id == app_id), None)
 
         if game is None:
             return
 
-        self.trailer_player.set_game(game.app_id)
-        self.game_title.setText(game.name)
+        game.steam_short_description = description
 
+        if self.selected_game is not None and self.selected_game.app_id == app_id:
+            self._update_game_details_text(game)
+
+    def _short_description_failed(self, app_id, _error_message):
+        self.description_requests_in_flight.discard(app_id)
+
+    def _update_game_details_text(self, game):
         playtime_hours = game.playtime_minutes / 60
         hltb_metric = self.hltb_metric_filter.currentText()
         hltb_time = game.hltb_time(hltb_metric)
@@ -1237,7 +1269,6 @@ class LibraryTab(QWidget):
         sorted_tags = sorted(game.tags.items(), key=lambda item: item[1], reverse=True)
         tag_names = [tag for tag, _weight in sorted_tags[:8]]
         tags = ", ".join(tag_names) if tag_names else "Unknown"
-        status_text = game.effective_status()
         last_played_timestamp = game.last_played_timestamp or 0
 
         if last_played_timestamp > 0:
@@ -1258,6 +1289,36 @@ class LibraryTab(QWidget):
         else:
             recent_activity_text = f"{recent_minutes} minutes"
 
+        steam_type_text = self.genre_tag_filter.display_steam_type(game)
+        reception_text = self._public_reception_text(game)
+        description_text = self._description_text(game)
+
+        self.game_details.setText(
+            f"ABOUT\n{description_text}\n\n"
+            f"Last played: {last_played_text}\n"
+            f"Last 2 weeks: {recent_activity_text}\n\n"
+            f"Steam Playtime: {playtime_hours:.1f} hours\n"
+            f"Steam Type: {steam_type_text}\n"
+            f"Public Reception: {reception_text}\n"
+            f"HLTB ({hltb_metric}): {hltb_text}\n"
+            f"Achievements: {achievement_text}\n\n"
+            f"Genres: {genres}\n\n"
+            f"Tags: {tags}"
+        )
+
+    def show_selected_game(self):
+        row = self.table.currentIndex().row()
+
+        if row < 0:
+            return
+
+        game = self.game_table_model.game_at(row)
+
+        if game is None:
+            return
+
+        self.trailer_player.set_game(game.app_id)
+        self.game_title.setText(game.name)
         self.selected_game = game
 
         self.manual_status_combo.blockSignals(True)
@@ -1279,24 +1340,10 @@ class LibraryTab(QWidget):
         self.rating_combo.blockSignals(False)
 
         self.status_value.setFixedWidth(75)
+        self.status_value.setText(game.effective_status())
 
-        self.status_value.setText(status_text)
-
-        steam_type_text = self.genre_tag_filter.display_steam_type(game)
-
-        reception_text = self._public_reception_text(game)
-
-        self.game_details.setText(
-            f"Last played: {last_played_text}\n"
-            f"Last 2 weeks: {recent_activity_text}\n\n"
-            f"Steam Playtime: {playtime_hours:.1f} hours\n"
-            f"Steam Type: {steam_type_text}\n"
-            f"Public Reception: {reception_text}\n"
-            f"HLTB ({hltb_metric}): {hltb_text}\n"
-            f"Achievements: {achievement_text}\n\n"
-            f"Genres: {genres}\n\n"
-            f"Tags: {tags}"
-        )
+        self._update_game_details_text(game)
+        self._request_short_description(game)
 
         self.steam_page_button.setEnabled(True)
         self.selected_refresh_status.setText("")
@@ -1310,12 +1357,10 @@ class LibraryTab(QWidget):
                 raise ValueError("Image could not be loaded.")
 
             self.current_game_pixmap = pixmap
-
             self.game_image.setText("")
             self.update_media_sizes()
         except Exception as error:  # noqa: BLE001
             self.current_game_pixmap = None
-
             self.game_image.setPixmap(QPixmap())
             self.game_image.setText("Image unavailable")
             print(f"Image failed for {game.name}: {error}")

@@ -20,6 +20,7 @@ class Game:
     metadata_updated_at: int | None = None
     steamspy_positive: int | None = None
     steamspy_negative: int | None = None
+    steam_short_description: str | None = None
 
     hltb_main: float | None = None
     hltb_main_extra: float | None = None

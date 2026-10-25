@@ -359,13 +359,13 @@ class GenreTagFilterWidget(QWidget):
         inferred_type = self.inferred_steam_type(game)
 
         if selected_type == "Game":
-            return raw_type == "game"
+            return inferred_type == "game"
 
         if selected_type == "Unknown (Game)":
             return raw_type == "unknown" and inferred_type == "game"
 
         if selected_type == "Software":
-            return raw_type == "software"
+            return inferred_type == "software"
 
         if selected_type == "Unknown (Software)":
             return raw_type == "unknown" and inferred_type == "software"

@@ -1,5 +1,6 @@
 import html
 import json
+from datetime import UTC, datetime
 
 import requests
 from PySide6.QtCore import (
@@ -41,6 +42,7 @@ from recommendations.persistence import (
 from recommendations.similar import SimilarGameIndex
 from storage.image_cache import get_cached_image_path, get_game_image
 from ui.genre_tag_filter import GenreTagFilterWidget
+from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 from workers import RecommendationBuildWorker
 
@@ -104,6 +106,7 @@ class RecommendationsTab(QWidget):
 
         self.image_targets = {}
         self.image_requests_in_flight = set()
+        self.description_requests_in_flight = set()
 
         self.recommendation_state = None
         self.recommendation_thread = None
@@ -424,8 +427,8 @@ class RecommendationsTab(QWidget):
         self.for_you_left_panel.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.for_you_left_panel.setMinimumWidth(440)
-        self.for_you_left_panel.setMaximumWidth(620)
+        self.for_you_left_panel.setMinimumWidth(500)
+        self.for_you_left_panel.setMaximumWidth(860)
 
         self.for_you_left_content = QWidget()
 
@@ -433,33 +436,30 @@ class RecommendationsTab(QWidget):
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(10)
 
+        self.for_you_hltb_title = QLabel("<b>HowLongToBeat</b>")
+
+        left_layout.addStretch(1)
         left_layout.addWidget(
             self.for_you_image,
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
-
         left_layout.addSpacing(8)
-        left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
-        left_layout.addWidget(self.for_you_hltb)
         left_layout.addWidget(self.for_you_trailer_player)
 
         steam_row = QHBoxLayout()
         steam_row.addWidget(self.for_you_steam_button)
         steam_row.addStretch()
-
         left_layout.addLayout(steam_row)
+        left_layout.addStretch(1)
 
         navigation_row = QHBoxLayout()
-
         navigation_row.addWidget(self.for_you_previous_button)
         navigation_row.addWidget(
             self.for_you_position_label,
             1,
         )
         navigation_row.addWidget(self.for_you_next_button)
-
         left_layout.addLayout(navigation_row)
-        left_layout.addStretch()
 
         self.for_you_left_panel.setWidget(self.for_you_left_content)
 
@@ -478,16 +478,16 @@ class RecommendationsTab(QWidget):
         splitter.addWidget(self.for_you_left_panel)
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 7)
 
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
 
         splitter.setSizes(
             [
-                520,
-                780,
+                760,
+                840,
             ]
         )
 
@@ -532,8 +532,8 @@ class RecommendationsTab(QWidget):
         self.similar_left_panel.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.similar_left_panel.setMinimumWidth(440)
-        self.similar_left_panel.setMaximumWidth(620)
+        self.similar_left_panel.setMinimumWidth(500)
+        self.similar_left_panel.setMaximumWidth(860)
 
         self.similar_left_content = QWidget()
 
@@ -541,22 +541,21 @@ class RecommendationsTab(QWidget):
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(10)
 
+        self.similar_hltb_title = QLabel("<b>HowLongToBeat</b>")
+
+        left_layout.addStretch(1)
         left_layout.addWidget(
             self.similar_image,
             alignment=Qt.AlignmentFlag.AlignHCenter,
         )
-
         left_layout.addSpacing(8)
-        left_layout.addWidget(QLabel("<b>HowLongToBeat</b>"))
-        left_layout.addWidget(self.similar_hltb)
         left_layout.addWidget(self.similar_trailer_player)
 
         steam_row = QHBoxLayout()
         steam_row.addWidget(self.similar_steam_button)
         steam_row.addStretch()
-
         left_layout.addLayout(steam_row)
-        left_layout.addStretch()
+        left_layout.addStretch(1)
 
         self.similar_left_panel.setWidget(self.similar_left_content)
 
@@ -575,16 +574,16 @@ class RecommendationsTab(QWidget):
         splitter.addWidget(self.similar_left_panel)
         splitter.addWidget(right_panel)
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 6)
+        splitter.setStretchFactor(1, 7)
 
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
 
         splitter.setSizes(
             [
-                520,
-                780,
+                760,
+                840,
             ]
         )
 
@@ -1075,6 +1074,205 @@ class RecommendationsTab(QWidget):
 
         return features
 
+    def _request_short_description(self, game):
+        if game.steam_short_description is not None:
+            return
+
+        if game.app_id in self.description_requests_in_flight:
+            return
+
+        self.description_requests_in_flight.add(game.app_id)
+
+        worker = StoreDescriptionWorker(game.app_id)
+        worker.signals.loaded.connect(self._short_description_loaded)
+        worker.signals.failed.connect(self._short_description_failed)
+        self.thread_pool.start(worker)
+
+    def _short_description_loaded(self, app_id, description):
+        self.description_requests_in_flight.discard(app_id)
+        game = self.games_by_id.get(app_id)
+
+        if game is None:
+            return
+
+        game.steam_short_description = description
+
+        if 0 <= self.current_for_you_index < len(self.for_you_records):
+            record = self.for_you_records[self.current_for_you_index]
+
+            if record["app_id"] == app_id:
+                self._render_for_you_text(game, record)
+
+        selected_similar_app_id = self._selected_similar_app_id()
+
+        if selected_similar_app_id == app_id:
+            score = self.similar_scores_by_id.get(app_id)
+
+            if score is not None:
+                reference_game = self.games_by_id.get(self.similar_reference_app_id)
+                reference_name = (
+                    reference_game.name
+                    if reference_game is not None
+                    else "the selected game"
+                )
+                self._render_similar_text(game, score, reference_name)
+
+    def _short_description_failed(self, app_id, _error_message):
+        self.description_requests_in_flight.discard(app_id)
+
+    @staticmethod
+    def _description_html(game):
+        description = game.steam_short_description
+
+        if description is None:
+            return "<p><i>Loading Steam description...</i></p>"
+
+        if not description:
+            return "<p><i>No Steam description is available.</i></p>"
+
+        return f"<p>{html.escape(description)}</p>"
+
+    @staticmethod
+    def _last_played_text(game):
+        timestamp = game.last_played_timestamp or 0
+
+        if timestamp <= 0:
+            return "Never"
+
+        return (
+            datetime.fromtimestamp(timestamp, tz=UTC)
+            .astimezone()
+            .strftime("%b %d, %Y")
+        )
+
+    @staticmethod
+    def _achievement_text(game):
+        if game.achievement_total is None or game.achievements_unlocked is None:
+            return "Unknown"
+
+        if game.achievement_total == 0:
+            return "None"
+
+        return f"{game.achievements_unlocked}/{game.achievement_total}"
+
+    def _at_a_glance_html(self, game):
+        playtime_hours = (game.playtime_minutes or 0) / 60
+        rows = [
+            ("Library status", game.effective_status()),
+            ("Steam playtime", f"{playtime_hours:.1f} h"),
+            ("Last played", self._last_played_text(game)),
+            ("Main Story", self._format_hours(game.hltb_main)),
+            ("Main + Extra", self._format_hours(game.hltb_main_extra)),
+            ("Completionist", self._format_hours(game.hltb_completionist)),
+            ("Achievements", self._achievement_text(game)),
+        ]
+
+        cells = "".join(
+            f"<tr><td style='padding-right:18px;'><b>{html.escape(label)}</b></td>"
+            f"<td>{html.escape(value)}</td></tr>"
+            for label, value in rows
+        )
+
+        return f"<table cellspacing='0' cellpadding='2'>{cells}</table>"
+
+    def _render_for_you_text(self, game, record):
+        self.for_you_title.setText(game.name)
+
+        steam_type_text = self.genre_tag_filter.display_steam_type(game)
+        reception_text = self._public_reception_text(game)
+        match_label = self._recommendation_match_label(record)
+        score_text = self._friendly_score(record["score"])
+        playtime_hours = (game.playtime_minutes or 0) / 60
+        play_state = "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+
+        self.for_you_summary.setText(
+            "<div>"
+            f"<span style='font-size: 15pt; font-weight: 700;'>"
+            f"{html.escape(match_label.upper())}</span>"
+            f"<span style='font-size: 19pt; font-weight: 700;'>"
+            f" · {html.escape(score_text)} MATCH</span><br>"
+            f"<span style='font-size: 11pt;'>"
+            f"{html.escape(game.effective_status())} · {html.escape(play_state)}</span><br>"
+            f"<span style='font-size: 11pt;'>Public Reception: "
+            f"{html.escape(reception_text)} · Steam Type: "
+            f"{html.escape(steam_type_text)}</span>"
+            "</div>"
+        )
+        self.for_you_summary.setToolTip(
+            f"Exact recommendation score: {record['score']:.4f}"
+        )
+
+        explanation = self._explanation_for(record)
+        self.for_you_details.setHtml(
+            self._format_recommendation_explanation(game, explanation)
+        )
+
+    def _render_similar_text(self, game, score, reference_name):
+        self.similar_title.setText(game.name)
+        steam_type_text = self.genre_tag_filter.display_steam_type(game)
+        reception_text = self._public_reception_text(game)
+        similarity_label = self._similarity_match_label(score.adjusted_similarity)
+        similarity_text = self._friendly_score(score.adjusted_similarity)
+        playtime_hours = (game.playtime_minutes or 0) / 60
+        play_state = "Never played" if playtime_hours <= 0 else f"{playtime_hours:.1f} h played"
+
+        self.similar_summary.setText(
+            "<div>"
+            f"<span style='font-size: 15pt; font-weight: 700;'>"
+            f"{html.escape(similarity_label.upper())}</span>"
+            f"<span style='font-size: 19pt; font-weight: 700;'>"
+            f" · {html.escape(similarity_text)} MATCH</span><br>"
+            f"<span style='font-size: 11pt;'>"
+            f"{html.escape(game.effective_status())} · {html.escape(play_state)}</span><br>"
+            f"<span style='font-size: 11pt;'>Similar to "
+            f"{html.escape(reference_name)} · Public Reception: "
+            f"{html.escape(reception_text)} · Steam Type: "
+            f"{html.escape(steam_type_text)}</span>"
+            "</div>"
+        )
+        self.similar_summary.setToolTip(
+            f"Exact adjusted similarity: {score.adjusted_similarity:.4f}"
+        )
+
+        shared_traits = [html.escape(name) for name in score.shared_traits]
+        genres = [html.escape(genre) for genre in (game.genres or [])]
+        sorted_tags = sorted(
+            (game.tags or {}).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        tag_names = [html.escape(tag) for tag, _weight in sorted_tags[:10]]
+
+        detail_parts = [
+            "<h3>About</h3>",
+            self._description_html(game),
+            "<h3>At a glance</h3>",
+            self._at_a_glance_html(game),
+            "<h3>Why it's similar</h3>",
+            f"<p><b>Shared feature count:</b> {score.shared_feature_count}</p>",
+        ]
+
+        if shared_traits:
+            detail_parts.append("<h3>Shared traits</h3>")
+            detail_parts.append("<p>" + " • ".join(shared_traits) + "</p>")
+
+        detail_parts.append("<h3>Game metadata</h3>")
+        detail_parts.append(
+            "<p><b>Genres:</b> "
+            + (" • ".join(genres) if genres else "Unknown")
+            + "</p>"
+        )
+        detail_parts.append(
+            "<p><b>Top tags:</b> "
+            + (" • ".join(tag_names) if tag_names else "Unknown")
+            + "</p>"
+        )
+        detail_parts.append(
+            "<p>This similarity result is based on genre/tag content features. "
+            "It does not use your overall personalized taste profile.</p>"
+        )
+        self.similar_details.setHtml("".join(detail_parts))
+
     def _populate_for_you_card(self):
         if not 0 <= self.current_for_you_index < len(self.for_you_records):
             self._clear_for_you_card("No recommendation selected.")
@@ -1113,33 +1311,8 @@ class RecommendationsTab(QWidget):
 
         self.for_you_next_button.setEnabled(navigation_enabled)
 
-        self.for_you_title.setText(game.name)
-
-        steam_type_text = self.genre_tag_filter.display_steam_type(game)
-        reception_text = self._public_reception_text(game)
-
-        match_label = self._recommendation_match_label(record)
-        score_text = self._friendly_score(record["score"])
-
-        self.for_you_summary.setText(
-            f"<span style='font-size: 12pt; font-weight: 600;'>"
-            f"{html.escape(match_label)} · {html.escape(score_text)}</span><br>"
-            f"<span>Steam Type: {html.escape(steam_type_text)}</span><br>"
-            f"<span>Public Reception: {html.escape(reception_text)}</span>"
-        )
-
-        self.for_you_summary.setToolTip(
-            f"Exact recommendation score: {record['score']:.4f}"
-        )
-
-        explanation = self._explanation_for(record)
-
-        self.for_you_details.setHtml(
-            self._format_recommendation_explanation(
-                game,
-                explanation,
-            )
-        )
+        self._render_for_you_text(game, record)
+        self._request_short_description(game)
 
     def _clear_for_you_card(self, message, title="No recommendation available"):
         self.current_for_you_index = -1
@@ -1349,7 +1522,13 @@ class RecommendationsTab(QWidget):
         game,
         explanation,
     ):
-        parts = ["<h3>Why it fits</h3>"]
+        parts = [
+            "<h3>About</h3>",
+            self._description_html(game),
+            "<h3>At a glance</h3>",
+            self._at_a_glance_html(game),
+            "<h3>Why it fits</h3>",
+        ]
 
         if explanation:
             taste_features = explanation.get(
@@ -1701,7 +1880,6 @@ class RecommendationsTab(QWidget):
         score,
     ):
         game = self.games_by_id.get(score.app_id)
-
         reference_game = self.games_by_id.get(self.similar_reference_app_id)
 
         if game is None:
@@ -1712,83 +1890,15 @@ class RecommendationsTab(QWidget):
             reference_game.name if reference_game is not None else "the selected game"
         )
 
-        self.similar_title.setText(game.name)
-
-        steam_type_text = self.genre_tag_filter.display_steam_type(game)
-
-        reception_text = self._public_reception_text(game)
-
-        similarity_label = self._similarity_match_label(score.adjusted_similarity)
-
-        similarity_text = self._friendly_score(score.adjusted_similarity)
-
-        self.similar_summary.setText(
-            f"<span style='font-size: 12pt; font-weight: 600;'>"
-            f"{html.escape(similarity_label)} · {html.escape(similarity_text)}</span><br>"
-            f"<span>Similar to {html.escape(reference_name)}"
-            f" · Steam Type: {html.escape(steam_type_text)}</span><br>"
-            f"<span>Public Reception: {html.escape(reception_text)}</span>"
-        )
-
-        self.similar_summary.setToolTip(
-            f"Exact adjusted similarity: {score.adjusted_similarity:.4f}"
-        )
-
+        self._render_similar_text(game, score, reference_name)
+        self._request_short_description(game)
         self.similar_hltb.setText(self._hltb_text(game))
-
-        shared_traits = [html.escape(name) for name in score.shared_traits]
-
-        genres = [html.escape(genre) for genre in (game.genres or [])]
-
-        sorted_tags = sorted(
-            (game.tags or {}).items(),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-
-        tag_names = [html.escape(tag) for tag, _weight in sorted_tags[:10]]
-
-        detail_parts = [
-            "<h3>Why it's similar</h3>",
-            f"<p><b>Shared feature count:</b> {score.shared_feature_count}</p>",
-        ]
-
-        if shared_traits:
-            detail_parts.append("<h3>Shared traits</h3>")
-            detail_parts.append("<p>" + " • ".join(shared_traits) + "</p>")
-
-        detail_parts.append("<h3>Game metadata</h3>")
-
-        detail_parts.append(
-            "<p><b>Genres:</b> "
-            + (" • ".join(genres) if genres else "Unknown")
-            + "</p>"
-        )
-
-        detail_parts.append(
-            "<p><b>Top tags:</b> "
-            + (" • ".join(tag_names) if tag_names else "Unknown")
-            + "</p>"
-        )
-
-        detail_parts.append(
-            "<p>This similarity result is based "
-            "on genre/tag content features. "
-            "It does not use your overall "
-            "personalized taste profile.</p>"
-        )
-
-        self.similar_details.setHtml("".join(detail_parts))
-
         self.similar_steam_button.setEnabled(True)
-
         self.similar_trailer_player.set_game(game.app_id)
-
         self.similar_image.setProperty(
             "steam_app_id",
             game.app_id,
         )
-
         self._request_image(
             game.app_id,
             self.similar_image,
@@ -1997,7 +2107,7 @@ class RecommendationsTab(QWidget):
 
             image_width = max(
                 320,
-                min(available_width, 480),
+                min(available_width, 720),
             )
 
             image_height = int(image_width * CARD_IMAGE_HEIGHT / CARD_IMAGE_WIDTH)
@@ -2010,9 +2120,23 @@ class RecommendationsTab(QWidget):
             self._rescale_image_label(label)
 
     def _update_responsive_typography(self):
-        wide = self.width() >= 1500
-        title_size = 19 if wide else 17
-        detail_size = 12 if wide else 11
+        width = self.width()
+
+        if width >= 1700:
+            title_size = 21
+            detail_size = 13
+            hltb_title_size = 13
+            hltb_size = 12
+        elif width >= 1350:
+            title_size = 19
+            detail_size = 12
+            hltb_title_size = 12
+            hltb_size = 11
+        else:
+            title_size = 17
+            detail_size = 11
+            hltb_title_size = 10
+            hltb_size = 10
 
         self.for_you_title.setStyleSheet(
             f"font-size: {title_size}pt; font-weight: bold;"
@@ -2020,6 +2144,17 @@ class RecommendationsTab(QWidget):
         self.similar_title.setStyleSheet(
             f"font-size: {title_size}pt; font-weight: bold;"
         )
+
+        for label in (self.for_you_hltb_title, self.similar_hltb_title):
+            font = label.font()
+            font.setPointSize(hltb_title_size)
+            font.setBold(True)
+            label.setFont(font)
+
+        for label in (self.for_you_hltb, self.similar_hltb):
+            font = label.font()
+            font.setPointSize(hltb_size)
+            label.setFont(font)
 
         for browser in (self.for_you_details, self.similar_details):
             font = browser.font()

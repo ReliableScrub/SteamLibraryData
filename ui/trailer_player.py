@@ -19,7 +19,7 @@ from api.store_api import get_trailer_url
 
 DEFAULT_TRAILER_VOLUME = 15
 MIN_PREVIEW_HEIGHT = 180
-MAX_PREVIEW_HEIGHT = 360
+MAX_PREVIEW_HEIGHT = 540
 
 _TRAILER_URL_CACHE = {}
 _NO_TRAILER_CACHE = set()
@@ -109,6 +109,14 @@ class TrailerPreviewContainer(QWidget):
     def minimumSizeHint(self):
         return QSize(220, MIN_PREVIEW_HEIGHT)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+
+        target_height = self.heightForWidth(event.size().width())
+
+        if self.height() != target_height:
+            self.setFixedHeight(target_height)
+
 
 class TrailerLookupSignals(QObject):
     finished = Signal(int, object, object)
@@ -171,7 +179,7 @@ class TrailerPlayer(QWidget):
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setSingleStep(5)
         self.volume_slider.setPageStep(10)
-        self.volume_slider.setMaximumWidth(160)
+        self.volume_slider.setMaximumWidth(220)
 
         initial_volume = max(0, min(int(initial_volume), 100))
         self.volume_slider.setValue(initial_volume)
@@ -198,24 +206,15 @@ class TrailerPlayer(QWidget):
             QSizePolicy.Policy.Fixed,
         )
 
-        controls = QVBoxLayout(self.controls_widget)
+        controls = QHBoxLayout(self.controls_widget)
         controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(4)
+        controls.addWidget(self.trailer_button)
+        controls.addWidget(self.time_label)
+        controls.addStretch()
+        controls.addWidget(self.volume_label)
+        controls.addWidget(self.volume_slider)
+        controls.addWidget(self.volume_value_label)
 
-        playback_row = QHBoxLayout()
-        playback_row.setContentsMargins(0, 0, 0, 0)
-        playback_row.addWidget(self.trailer_button)
-        playback_row.addWidget(self.time_label)
-        playback_row.addStretch()
-
-        volume_row = QHBoxLayout()
-        volume_row.setContentsMargins(0, 0, 0, 0)
-        volume_row.addWidget(self.volume_label)
-        volume_row.addWidget(self.volume_slider, 1)
-        volume_row.addWidget(self.volume_value_label)
-
-        controls.addLayout(playback_row)
-        controls.addLayout(volume_row)
         layout.addWidget(self.controls_widget)
 
     def _connect_signals(self):

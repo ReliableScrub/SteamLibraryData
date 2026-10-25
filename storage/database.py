@@ -44,6 +44,7 @@ def initialize_database():
                 metadata_updated_at INTEGER,
                 steamspy_positive INTEGER,
                 steamspy_negative INTEGER,
+                steam_short_description TEXT,
 
                 hltb_main REAL,
                 hltb_main_extra REAL,
@@ -170,9 +171,10 @@ def save_game(game):
                 achievements_playtime_minutes,
                 manual_status,
                 metadata_updated_at,
-                hltb_updated_at
+                hltb_updated_at,
+                steam_short_description
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(app_id) DO UPDATE SET
                 name = excluded.name,
                 playtime_minutes = excluded.playtime_minutes,
@@ -200,7 +202,8 @@ def save_game(game):
                 achievements_playtime_minutes = excluded.achievements_playtime_minutes,
                 manual_status = excluded.manual_status,
                 metadata_updated_at = excluded.metadata_updated_at,
-                hltb_updated_at = excluded.hltb_updated_at
+                hltb_updated_at = excluded.hltb_updated_at,
+                steam_short_description = excluded.steam_short_description
         """,
             (
                 game.app_id,
@@ -231,6 +234,7 @@ def save_game(game):
                 game.manual_status,
                 game.metadata_updated_at,
                 game.hltb_updated_at,
+                game.steam_short_description,
             ),
         )
 
@@ -376,6 +380,24 @@ def save_hltb_data(game, candidates=None):
                     candidate.get("similarity"),
                     candidate.get("search_query"),
                 ),
+            )
+
+
+def save_steam_short_description(app_id, description):
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            --sql
+            UPDATE games
+            SET steam_short_description = ?
+            WHERE app_id = ?
+            """,
+            (description, app_id),
+        )
+
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Could not save Steam description for AppID {app_id}: game not found."
             )
 
 
@@ -578,7 +600,8 @@ def load_games():
                 achievements_playtime_minutes,
                 manual_status,
                 metadata_updated_at,
-                hltb_updated_at
+                hltb_updated_at,
+                steam_short_description
             FROM games
         """).fetchall()
 
@@ -639,8 +662,9 @@ def load_games():
                 genres=genres,
                 tags=tags,
                 manual_status=row[25],
-                metadata_updated_at=row[-2],
-                hltb_updated_at=row[-1],
+                metadata_updated_at=row[26],
+                hltb_updated_at=row[27],
+                steam_short_description=row[28],
             )
 
             games.append(game)
@@ -794,6 +818,9 @@ def ensure_game_columns(conn):
 
     if "hltb_updated_at" not in columns:
         conn.execute("ALTER TABLE games ADD COLUMN hltb_updated_at INTEGER")
+
+    if "steam_short_description" not in columns:
+        conn.execute("ALTER TABLE games ADD COLUMN steam_short_description TEXT")
 
 
 def reset_empty_hltb_checks():
