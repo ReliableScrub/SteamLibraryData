@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
     QCompleter,
-    QDoubleSpinBox,
     QFrame,
     QGraphicsOpacityEffect,
     QGridLayout,
@@ -48,7 +47,12 @@ from recommendations.persistence import (
 from recommendations.similar import SimilarGameIndex
 from storage.image_cache import get_cached_image_path, get_game_image
 from ui.genre_tag_filter import GenreTagFilterWidget
-from ui.semantic_widgets import BadgeLabel, SectionHeading, StatTile
+from ui.semantic_widgets import (
+    BadgeLabel,
+    SectionHeading,
+    SelectAllDoubleSpinBox,
+    StatTile,
+)
 from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 from workers import RecommendationBuildWorker
@@ -84,19 +88,6 @@ class ImageWorker(QRunnable):
             self.app_id,
             image_path,
         )
-
-
-class SelectAllDoubleSpinBox(QDoubleSpinBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self._editing_was_empty = False
-        line_edit = self.lineEdit()
-
-        if line_edit is not None:
-            line_edit.textEdited.connect(self._text_edited)
-
-        self.editingFinished.connect(self._normalize_empty_value)
 
     def _text_edited(self, text):
         suffix = self.suffix()

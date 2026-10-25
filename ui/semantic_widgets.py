@@ -1,5 +1,5 @@
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QDoubleSpinBox, QFrame, QLabel, QVBoxLayout
 
 
 def repolish(widget):
@@ -69,3 +69,13 @@ class StatTile(QFrame):
 
     def set_value(self, value):
         self.value.setText(value)
+
+
+class SelectAllDoubleSpinBox(QDoubleSpinBox):
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+
+        QTimer.singleShot(
+            0,
+            self.selectAll,
+        )

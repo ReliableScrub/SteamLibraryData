@@ -98,10 +98,7 @@ class Game:
         # Some legacy/test Steam entries are only identifiable by a trailing
         # "Beta" in the title. Restrict this heuristic to unknown Steam types
         # so normal released games are not reclassified by name alone.
-        if self.steam_type == "unknown" and normalized_name.endswith(" beta"):
-            return True
-
-        return False
+        return bool(self.steam_type == "unknown" and normalized_name.endswith(" beta"))
 
     def hltb_time(self, metric):
         if metric == "Main Story":

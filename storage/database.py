@@ -841,72 +841,6 @@ def reset_empty_hltb_checks():
 
         return cursor.rowcount
 
-
-def reset_hltb_for_game_name(game_name):
-    with get_connection() as connection:
-        cursor = connection.execute(
-            """
-            UPDATE games
-            SET
-                hltb_main = NULL,
-                hltb_main_extra = NULL,
-                hltb_completionist = NULL,
-                hltb_all_styles = NULL,
-                hltb_match_name = NULL,
-                hltb_similarity = NULL,
-                hltb_checked = 0
-            WHERE name = ?
-            """,
-            (game_name,),
-        )
-
-        return cursor.rowcount
-
-
-def replace_hltb_candidates(app_id, candidates):
-    with get_connection() as connection:
-        connection.execute(
-            "DELETE FROM hltb_candidates WHERE app_id = ?",
-            (app_id,),
-        )
-
-        for candidate in candidates:
-            game_id = candidate.get("game_id")
-
-            if game_id is None:
-                continue
-
-            connection.execute(
-                """
-                INSERT INTO hltb_candidates (
-                    app_id,
-                    hltb_game_id,
-                    game_name,
-                    game_web_link,
-                    main_story,
-                    main_extra,
-                    completionist,
-                    all_styles,
-                    similarity,
-                    search_query
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    app_id,
-                    game_id,
-                    candidate["game_name"],
-                    candidate.get("game_web_link"),
-                    candidate.get("main_story"),
-                    candidate.get("main_extra"),
-                    candidate.get("completionist"),
-                    candidate.get("all_styles"),
-                    candidate.get("similarity"),
-                    candidate.get("search_query"),
-                ),
-            )
-
-
 def load_hltb_candidates(app_id):
     with get_connection() as connection:
         rows = connection.execute(
@@ -942,14 +876,6 @@ def load_hltb_candidates(app_id):
         }
         for row in rows
     ]
-
-
-def clear_hltb_candidates(app_id):
-    with get_connection() as connection:
-        connection.execute(
-            "DELETE FROM hltb_candidates WHERE app_id = ?",
-            (app_id,),
-        )
 
 
 def get_game_rating(app_id):

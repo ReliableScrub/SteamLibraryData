@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -49,7 +48,7 @@ from storage.settings import (
 )
 from ui.game_table_model import GameTableModel
 from ui.genre_tag_filter import GenreTagFilterWidget
-from ui.semantic_widgets import BadgeLabel, SectionHeading
+from ui.semantic_widgets import BadgeLabel, SectionHeading, SelectAllDoubleSpinBox
 from ui.store_description_loader import StoreDescriptionWorker
 from ui.trailer_player import TrailerPlayer
 
@@ -179,19 +178,6 @@ class SelectedGameRefreshController(QObject):
         self._active_worker = None
         self._busy = False
         self.busy_changed.emit(False)
-
-
-class SelectAllDoubleSpinBox(QDoubleSpinBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        self._editing_was_empty = False
-        line_edit = self.lineEdit()
-
-        if line_edit is not None:
-            line_edit.textEdited.connect(self._text_edited)
-
-        self.editingFinished.connect(self._normalize_empty_value)
 
     def _text_edited(self, text):
         suffix = self.suffix()
