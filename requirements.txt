@@ -1,4 +1,6 @@
-PySide6
-requests
-keyring
-howlongtobeatpy
+howlongtobeatpy==1.0.23
+keyring==25.7.0
+PySide6==6.11.2
+requests==2.34.2
+scikit-learn==1.9.1
+secretstorage; sys_platform == "linux"

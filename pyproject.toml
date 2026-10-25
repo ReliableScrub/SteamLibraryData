@@ -1,0 +1,5 @@
+[tool.pyside6.deploy]
+title = "SteamLibraryData"
+input_file = "main.py"
+exec_directory = "dist"
+mode = "onefile"
