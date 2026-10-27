@@ -70,6 +70,10 @@ def _is_no_stats_error(error_message):
     return "no stats" in text or "no achievements" in text
 
 
+def _is_profile_not_public_error(error_message):
+    return "profile is not public" in (error_message or "").casefold()
+
+
 def game_has_achievements(steam_api_key, app_id):
     """
     Ask Steam for the game's achievement schema.
@@ -199,8 +203,23 @@ def get_achievement_progress(
         if _fallback_confirms_no_achievements(steam_api_key, app_id):
             return 0, 0
 
-        raise SteamApiKeyRejected(
-            "Steam rejected the Web API request. Check the API key in Maintenance."
+        detail = error_message or response.text.strip() or "No response details"
+
+        print(f"Steam achievement 403 for AppID {app_id}: {detail[:1000]}")
+
+        if _is_profile_not_public_error(error_message):
+            raise SteamApiError(
+                "Steam could not provide achievement data because it reported "
+                "'Profile is not public.' Before updating achievements, set both "
+                "My Profile and Game details to Public under Profile > Edit Profile "
+                "> Privacy Settings. After the update finishes, you can restore "
+                "your preferred privacy settings. If those settings are already "
+                "Public, Steam may still be propagating the change. If only this "
+                "game fails, check whether the game itself is marked Private in Steam."
+            )
+
+        raise SteamApiError(
+            f"Steam returned HTTP 403 while loading achievements: {detail[:300]}"
         )
 
     if 500 <= response.status_code < 600:

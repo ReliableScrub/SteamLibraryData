@@ -2,7 +2,16 @@ import random
 import time
 from datetime import UTC, datetime
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QRunnable,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -55,7 +64,7 @@ from ui.trailer_player import TrailerPlayer
 LIBRARY_DISPLAY_PRESETS = {
     "Compact": {
         "table_font": 11,
-        "header_font": 11,
+        "header_font": 13,
         "row_height": 30,
         "detail_font": 11,
         "title_narrow": 15,
@@ -63,7 +72,7 @@ LIBRARY_DISPLAY_PRESETS = {
     },
     "Normal": {
         "table_font": 12,
-        "header_font": 12,
+        "header_font": 14,
         "row_height": 36,
         "detail_font": 12,
         "title_narrow": 16,
@@ -71,7 +80,7 @@ LIBRARY_DISPLAY_PRESETS = {
     },
     "Large": {
         "table_font": 14,
-        "header_font": 13,
+        "header_font": 16,
         "row_height": 46,
         "detail_font": 14,
         "title_narrow": 18,
@@ -79,6 +88,17 @@ LIBRARY_DISPLAY_PRESETS = {
     },
 }
 DEFAULT_LIBRARY_DISPLAY_SIZE = "Normal"
+
+DEFAULT_LIBRARY_COLUMN_WIDTHS = (
+    320,  # Game
+    110,  # Status
+    120,  # Steam Playtime
+    130,  # Last Played
+    90,  # Rating
+    150,  # HLTB Time
+    120,  # Achievements
+    130,  # Steam Type
+)
 
 
 class SelectedGameRefreshSignals(QObject):
@@ -235,6 +255,12 @@ class LibraryTab(QWidget):
         self._selected_refresh_busy = False
         self._global_update_busy = False
         self.description_requests_in_flight = set()
+        self._adjusting_columns = False
+        self._preferred_column_widths = list(DEFAULT_LIBRARY_COLUMN_WIDTHS)
+        self._column_save_timer = QTimer(self)
+        self._column_save_timer.setSingleShot(True)
+        self._column_save_timer.setInterval(250)
+        self._column_save_timer.timeout.connect(self._save_library_view)
 
         self._create_filter_controls()
         self._create_table()
@@ -244,6 +270,8 @@ class LibraryTab(QWidget):
         self._restore_library_view()
         self._connect_signals()
         self.apply_filters()
+
+        QTimer.singleShot(0, self._apply_library_display_size)
 
     def _create_filter_controls(self):
         self.search_box = EscapeClearsLineEdit()
@@ -330,6 +358,18 @@ class LibraryTab(QWidget):
         self.display_size_combo.setCurrentText(DEFAULT_LIBRARY_DISPLAY_SIZE)
         self.display_size_combo.setToolTip(
             "Adjust Library table rows and selected-game text for readability."
+        )
+
+        self.reset_columns_button = QPushButton("Reset Columns")
+        self.reset_columns_button.setToolTip(
+            "Restore the default Library column order, visibility, and widths. "
+            "You can also drag headers to reorder them and right-click a header "
+            "to show or hide columns."
+        )
+
+        self.help_faq_button = QPushButton("Help / FAQ")
+        self.help_faq_button.setToolTip(
+            "Open setup help and answers for common SteamLibraryData issues."
         )
 
         self.clear_filters_button = QPushButton("Clear Filters")
@@ -449,20 +489,29 @@ class LibraryTab(QWidget):
         self.table.setAlternatingRowColors(True)
 
         header = self.table.horizontalHeader()
+        header.setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         header.setSectionsClickable(True)
+        header.setSectionsMovable(True)
         header.setSortIndicatorShown(False)
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(70)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+
+        for column, width in enumerate(DEFAULT_LIBRARY_COLUMN_WIDTHS):
+            header.resizeSection(column, width)
+
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.setToolTip(
+            "Drag headers to reorder columns. Drag dividers to resize. "
+            "Double-click a divider to auto-fit, or right-click for column options."
+        )
+        self.table.viewport().installEventFilter(self)
         header.sectionClicked.connect(self.sort_by_column)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
 
     def _create_details(self):
         self.game_image = QLabel("Select a game")
@@ -529,8 +578,13 @@ class LibraryTab(QWidget):
         self.empty_details_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.steam_page_button = QPushButton("Steam Page")
+        self.hltb_page_button = QPushButton("HLTB Page")
 
         self.steam_page_button.setEnabled(False)
+        self.hltb_page_button.setEnabled(False)
+        self.hltb_page_button.setToolTip(
+            "Open the accepted HowLongToBeat match for the selected game."
+        )
 
         self.refresh_hltb_button = QPushButton("HLTB")
         self.refresh_metadata_button = QPushButton("Genre / Tags")
@@ -560,6 +614,8 @@ class LibraryTab(QWidget):
         search_row.addSpacing(8)
         search_row.addWidget(QLabel("Display:"))
         search_row.addWidget(self.display_size_combo)
+        search_row.addWidget(self.reset_columns_button)
+        search_row.addWidget(self.help_faq_button)
 
         primary_filter_row = QHBoxLayout()
         primary_filter_row.addWidget(QLabel("Status:"))
@@ -650,6 +706,7 @@ class LibraryTab(QWidget):
 
         action_row = QHBoxLayout()
         action_row.addWidget(self.steam_page_button)
+        action_row.addWidget(self.hltb_page_button)
         action_row.addStretch()
         details_layout.addLayout(action_row)
         details_layout.addStretch()
@@ -675,6 +732,7 @@ class LibraryTab(QWidget):
             self.selected_refresh_status,
             self.trailer_player,
             self.steam_page_button,
+            self.hltb_page_button,
         ]
 
         self._set_detail_content_visible(False)
@@ -766,6 +824,8 @@ class LibraryTab(QWidget):
         self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
+        self.hltb_page_button.clicked.connect(self.open_selected_hltb_page)
+        self.reset_columns_button.clicked.connect(self.reset_table_columns)
 
         self.refresh_hltb_button.clicked.connect(
             lambda: self._refresh_selected_game("hltb")
@@ -796,6 +856,11 @@ class LibraryTab(QWidget):
             update_controller.busy_changed.connect(self._global_update_busy_changed)
 
         self.splitter.splitterMoved.connect(self._splitter_moved)
+        header = self.table.horizontalHeader()
+        header.sectionResized.connect(self._table_column_resized)
+        header.sectionMoved.connect(self._table_columns_changed)
+        header.sectionHandleDoubleClicked.connect(self._auto_fit_column)
+        header.customContextMenuRequested.connect(self._show_header_context_menu)
         self.rating_filter.currentTextChanged.connect(self._library_filter_changed)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_table_context_menu)
@@ -870,6 +935,8 @@ class LibraryTab(QWidget):
 
         menu = QMenu(self)
         open_action = menu.addAction("Open Steam Page")
+        open_hltb_action = menu.addAction("Open HLTB Page")
+        open_hltb_action.setEnabled(bool(getattr(game, "hltb_web_link", None)))
         menu.addSeparator()
         refresh_hltb_action = menu.addAction("Refresh HLTB")
         refresh_metadata_action = menu.addAction("Refresh Genre / Tags")
@@ -889,6 +956,8 @@ class LibraryTab(QWidget):
 
         if action == open_action:
             self.open_selected_steam_page()
+        elif action == open_hltb_action:
+            self.open_selected_hltb_page()
         elif action == refresh_hltb_action:
             self._refresh_selected_game("hltb")
         elif action == refresh_metadata_action:
@@ -1029,6 +1098,8 @@ class LibraryTab(QWidget):
             )
             self.game_table_model.set_sort_column(self.header_sort_column)
 
+        self._restore_table_columns(settings)
+
         splitter_sizes = settings.get("splitter_sizes")
 
         if (
@@ -1077,8 +1148,222 @@ class LibraryTab(QWidget):
                     else "ascending"
                 ),
                 "splitter_sizes": self.splitter.sizes(),
+                "column_widths": list(self._preferred_column_widths),
+                "column_order": [
+                    self.table.horizontalHeader().logicalIndex(visual_index)
+                    for visual_index in range(self.game_table_model.columnCount())
+                ],
+                "hidden_columns": [
+                    column
+                    for column in range(self.game_table_model.columnCount())
+                    if self.table.isColumnHidden(column)
+                ],
             }
         )
+
+    def _restore_table_columns(self, settings):
+        header = self.table.horizontalHeader()
+        column_count = self.game_table_model.columnCount()
+        widths = settings.get("column_widths")
+
+        if (
+            isinstance(widths, list)
+            and len(widths) == column_count
+            and all(isinstance(width, int) and width >= 70 for width in widths)
+        ):
+            self._preferred_column_widths = list(widths)
+        else:
+            self._preferred_column_widths = list(DEFAULT_LIBRARY_COLUMN_WIDTHS)
+
+        order = settings.get("column_order")
+        hidden_columns = settings.get("hidden_columns", [])
+
+        self._adjusting_columns = True
+        header.blockSignals(True)
+
+        try:
+            for column, width in enumerate(self._preferred_column_widths):
+                header.resizeSection(column, width)
+
+            if (
+                isinstance(order, list)
+                and len(order) == column_count
+                and sorted(order) == list(range(column_count))
+            ):
+                for target_visual_index, logical_index in enumerate(order):
+                    current_visual_index = header.visualIndex(logical_index)
+
+                    if current_visual_index != target_visual_index:
+                        header.moveSection(current_visual_index, target_visual_index)
+
+            hidden_set = {
+                column
+                for column in hidden_columns
+                if isinstance(column, int) and 0 < column < column_count
+            }
+
+            for column in range(column_count):
+                self.table.setColumnHidden(column, column in hidden_set)
+        finally:
+            header.blockSignals(False)
+            self._adjusting_columns = False
+
+        QTimer.singleShot(0, self._fit_table_columns)
+
+    def eventFilter(self, watched, event):
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._fit_table_columns)
+
+        return super().eventFilter(watched, event)
+
+    def _fit_table_columns(self):
+        if self._adjusting_columns:
+            return
+
+        column_count = self.game_table_model.columnCount()
+        visible_columns = [
+            column
+            for column in range(column_count)
+            if not self.table.isColumnHidden(column)
+        ]
+
+        if not visible_columns:
+            return
+
+        available_width = self.table.viewport().width()
+
+        if available_width <= 0:
+            return
+
+        preferred = {
+            column: max(self._preferred_column_widths[column], 70)
+            for column in visible_columns
+        }
+        preferred_total = sum(preferred.values())
+        filler_column = 0 if 0 in visible_columns else visible_columns[0]
+        target_widths = dict(preferred)
+
+        if preferred_total < available_width:
+            target_widths[filler_column] += available_width - preferred_total
+
+        header = self.table.horizontalHeader()
+        self._adjusting_columns = True
+
+        try:
+            for column, width in target_widths.items():
+                if header.sectionSize(column) != width:
+                    header.resizeSection(column, width)
+        finally:
+            self._adjusting_columns = False
+
+    def _table_column_resized(self, logical_index, _old_size, new_size):
+        if self._adjusting_columns:
+            return
+
+        if 0 <= logical_index < len(self._preferred_column_widths):
+            self._preferred_column_widths[logical_index] = max(int(new_size), 70)
+
+        self._column_save_timer.start()
+        QTimer.singleShot(0, self._fit_table_columns)
+
+    def _table_columns_changed(self, *_):
+        if self._adjusting_columns:
+            return
+
+        self._column_save_timer.start()
+        QTimer.singleShot(0, self._fit_table_columns)
+
+    def _auto_fit_column(self, logical_index):
+        if not 0 <= logical_index < self.game_table_model.columnCount():
+            return
+
+        self.table.resizeColumnToContents(logical_index)
+        width = max(self.table.horizontalHeader().sectionSize(logical_index), 70)
+        self._preferred_column_widths[logical_index] = width
+        self._save_library_view()
+        self._fit_table_columns()
+
+    def _show_header_context_menu(self, position):
+        header = self.table.horizontalHeader()
+        logical_index = header.logicalIndexAt(position)
+        menu = QMenu(self)
+        auto_fit_action = None
+
+        if logical_index >= 0:
+            label = self.game_table_model.headerData(
+                logical_index,
+                Qt.Orientation.Horizontal,
+                Qt.ItemDataRole.DisplayRole,
+            )
+            auto_fit_action = menu.addAction(f"Auto-fit {label}")
+            menu.addSeparator()
+
+        visibility_actions = {}
+
+        for column in range(self.game_table_model.columnCount()):
+            label = self.game_table_model.headerData(
+                column,
+                Qt.Orientation.Horizontal,
+                Qt.ItemDataRole.DisplayRole,
+            )
+            action = menu.addAction(str(label))
+            action.setCheckable(True)
+            action.setChecked(not self.table.isColumnHidden(column))
+
+            if column == 0:
+                action.setEnabled(False)
+                action.setToolTip("The Game column is always shown.")
+
+            visibility_actions[action] = column
+
+        menu.addSeparator()
+        reset_action = menu.addAction("Reset Columns")
+        selected_action = menu.exec(header.viewport().mapToGlobal(position))
+
+        if selected_action is None:
+            return
+
+        if selected_action == auto_fit_action and logical_index >= 0:
+            self._auto_fit_column(logical_index)
+            return
+
+        if selected_action == reset_action:
+            self.reset_table_columns()
+            return
+
+        column = visibility_actions.get(selected_action)
+
+        if column is None or column == 0:
+            return
+
+        self.table.setColumnHidden(column, not selected_action.isChecked())
+        self._save_library_view()
+        self._fit_table_columns()
+
+    def reset_table_columns(self):
+        header = self.table.horizontalHeader()
+        self._preferred_column_widths = list(DEFAULT_LIBRARY_COLUMN_WIDTHS)
+        self._adjusting_columns = True
+        header.blockSignals(True)
+
+        try:
+            for column in range(self.game_table_model.columnCount()):
+                self.table.setColumnHidden(column, False)
+
+            for logical_index in range(self.game_table_model.columnCount()):
+                current_visual_index = header.visualIndex(logical_index)
+
+                if current_visual_index != logical_index:
+                    header.moveSection(current_visual_index, logical_index)
+
+            for column, width in enumerate(self._preferred_column_widths):
+                header.resizeSection(column, width)
+        finally:
+            header.blockSignals(False)
+            self._adjusting_columns = False
+
+        self._fit_table_columns()
+        self._save_library_view()
 
     def _library_display_size_changed(self, *_):
         self._apply_library_display_size()
@@ -1121,6 +1406,7 @@ class LibraryTab(QWidget):
 
     def _splitter_moved(self, *_):
         self.update_media_sizes()
+        self._fit_table_columns()
         self._save_library_view()
 
     def _library_filter_changed(self):
@@ -2044,6 +2330,7 @@ class LibraryTab(QWidget):
         self._request_short_description(game)
 
         self.steam_page_button.setEnabled(True)
+        self.hltb_page_button.setEnabled(bool(getattr(game, "hltb_web_link", None)))
         self._set_selected_refresh_status("")
         self._set_detail_content_visible(True)
         self._update_selected_refresh_enabled()
@@ -2479,7 +2766,7 @@ class LibraryTab(QWidget):
         QMessageBox.warning(
             self,
             f"{label} Refresh Failed",
-            f"Could not refresh {label} for {game.name}:\\n\\n{error_message}",
+            f"Could not refresh {label} for {game.name}:\n\n{error_message}",
         )
 
     def stop_trailer(self):
@@ -2512,6 +2799,7 @@ class LibraryTab(QWidget):
         self.rating_combo.blockSignals(False)
 
         self.steam_page_button.setEnabled(False)
+        self.hltb_page_button.setEnabled(False)
         self._set_selected_refresh_status("")
         self._set_detail_content_visible(False)
         self._update_selected_refresh_enabled()
@@ -2525,6 +2813,17 @@ class LibraryTab(QWidget):
         url = QUrl(f"https://store.steampowered.com/app/{self.selected_game.app_id}/")
 
         QDesktopServices.openUrl(url)
+
+    def open_selected_hltb_page(self):
+        if self.selected_game is None:
+            return
+
+        web_link = getattr(self.selected_game, "hltb_web_link", None)
+
+        if not web_link:
+            return
+
+        QDesktopServices.openUrl(QUrl(web_link))
 
     def update_media_sizes(self):
         if not hasattr(self, "details_content"):

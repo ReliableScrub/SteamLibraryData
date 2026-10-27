@@ -1,9 +1,9 @@
 import time
 from functools import partial
 
-from game_classification import GameClassifier
 from PySide6.QtCore import QObject, QThread, Signal
 
+from game_classification import GameClassifier
 from game_updates import (
     update_achievements,
     update_hltb,
@@ -651,9 +651,6 @@ class UpdateController(QObject):
         if self.is_running():
             return "busy"
 
-        if not self.games:
-            return "nothing"
-
         self._startup_refresh_active = True
         self._startup_steam_id = steam_id
 
@@ -700,6 +697,11 @@ class UpdateController(QObject):
         self._cancel_requested = False
 
         if startup_refresh and not was_cancelled and library_succeeded:
+            result = self.start_all_missing(startup_steam_id)
+
+            if result == "started":
+                return
+
             result = self.start_recent_achievement_refresh(startup_steam_id)
 
             if result == "started":

@@ -149,6 +149,11 @@ class MaintenanceTab(QWidget):
         }:
             self.appearance_combo.setCurrentText(appearance)
 
+        self.help_faq_button = QPushButton("Help / FAQ")
+        self.help_faq_button.setToolTip(
+            "Open setup help and answers for common SteamLibraryData issues."
+        )
+
         self.clear_images_button = QPushButton("Clear Image Cache")
 
         self.reset_database_button = QPushButton("Reset Local Database")
@@ -165,6 +170,12 @@ class MaintenanceTab(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 20, 24, 24)
         layout.setSpacing(14)
+
+        page_header = QHBoxLayout()
+        page_header.addWidget(QLabel("<h2>Maintenance</h2>"))
+        page_header.addStretch()
+        page_header.addWidget(self.help_faq_button)
+        layout.addLayout(page_header)
 
         updates_card = QFrame()
         updates_card.setProperty("card", True)

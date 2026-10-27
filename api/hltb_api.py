@@ -252,6 +252,17 @@ def normalize_title(title):
     return " ".join(title.split())
 
 
+def is_friends_pass_title(title):
+    normalized = normalize_title(title)
+
+    return bool(
+        re.search(
+            r"\b(?:friend s|friends|friend) pass\b",
+            normalized,
+        )
+    )
+
+
 def title_tokens(title):
     return sorted(normalize_title(title).split())
 
@@ -528,30 +539,6 @@ def build_hltb_queries(game_name):
     # These transformations are already considered safe by the matcher.
     # Put the likely HLTB-facing forms before the raw Steam storefront name.
     stripped = strip_safe_suffixes(cleaned)
-
-    plus_as_ampersand = re.sub(
-        r"\s+\+\s+",
-        " & ",
-        stripped,
-    )
-
-    if plus_as_ampersand != stripped:
-        add_query(
-            queries,
-            plus_as_ampersand,
-        )
-
-    plus_as_and = re.sub(
-        r"\s+\+\s+",
-        " and ",
-        stripped,
-    )
-
-    if plus_as_and != stripped:
-        add_query(
-            queries,
-            plus_as_and,
-        )
 
     no_year = re.sub(
         r"\s*\((?:19|20)\d{2}\)\s*$",
@@ -1388,6 +1375,15 @@ def get_hltb_data(
         reset_hltb_cache()
 
     try:
+        if is_friends_pass_title(game_name):
+            print(f"HLTB skipped Friend's Pass app: {game_name}")
+
+            return {
+                "status": "no_match",
+                "match": None,
+                "candidates": [],
+            }
+
         discovery = discover_hltb_candidates(
             game_name,
             steam_app_id,

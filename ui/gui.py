@@ -274,6 +274,10 @@ class MainWindow(QMainWindow):
 
         self.maintenance_tab.remove_api_key_button.clicked.connect(self.remove_api_key)
 
+        self.library_tab.help_faq_button.clicked.connect(self.show_help_faq)
+        self.recommendations_tab.help_faq_button.clicked.connect(self.show_help_faq)
+        self.maintenance_tab.help_faq_button.clicked.connect(self.show_help_faq)
+
         self.maintenance_tab.clear_images_button.clicked.connect(
             self.clear_cached_images
         )
@@ -329,6 +333,66 @@ class MainWindow(QMainWindow):
             title,
             message,
         )
+
+    def show_help_faq(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("SteamLibraryData Help / FAQ")
+        dialog.resize(780, 600)
+
+        layout = QVBoxLayout(dialog)
+        heading = QLabel("<h2>Help / FAQ</h2>")
+        layout.addWidget(heading)
+
+        faq = QPlainTextEdit()
+        faq.setReadOnly(True)
+        faq.setPlainText(
+            "STEAM ACHIEVEMENTS AND PRIVACY\n"
+            "\n"
+            "Why does Steam say 'Profile is not public'?\n"
+            "Before updating achievements, set both My Profile and Game details to "
+            "Public in Steam under Profile > Edit Profile > Privacy Settings. Steam "
+            "may take some time to reflect a privacy change in the Web API.\n"
+            "\n"
+            "After the achievement update finishes, you can restore your preferred "
+            "privacy settings. A later achievement refresh may require making them "
+            "Public again.\n"
+            "\n"
+            "If only one game repeatedly fails while the rest work, check whether "
+            "that specific game is individually marked Private in Steam. Steam does "
+            "not provide SteamLibraryData a distinct error that proves this case.\n"
+            "\n"
+            "STEAM WEB API KEY\n"
+            "\n"
+            "SteamLibraryData requires your own Steam Web API key. The key can be "
+            "changed or removed from Maintenance. The key is stored using the "
+            "operating system credential manager.\n"
+            "\n"
+            "STARTUP UPDATES\n"
+            "\n"
+            "On launch, SteamLibraryData refreshes the Steam library and then "
+            "automatically checks any missing classification, HLTB, Genre / Tags, "
+            "and achievement data. Existing completed data is not re-downloaded just "
+            "because the app started. Long updates can be cancelled from Maintenance.\n"
+            "\n"
+            "HOWLONGTOBEAT\n"
+            "\n"
+            "Some HLTB matches need manual review when the title match is uncertain. "
+            "Use Review HLTB Matches in Maintenance. When a selected game has an "
+            "accepted HLTB match, the HLTB Page button opens that match directly.\n"
+            "\n"
+            "LOCAL DATA\n"
+            "\n"
+            "Library enrichment, ratings, statuses, and recommendation data are stored "
+            "locally. Reset Local Database removes collected local data for the current "
+            "SteamLibraryData database."
+        )
+        layout.addWidget(faq, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.exec()
 
     def show_update_failures(self):
         failures = self.update_controller.failures()
@@ -811,7 +875,7 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.StandardButton.Yes:
-            self.start_library_refresh()
+            self.start_startup_refresh()
 
     def closeEvent(self, event):
         if self.update_controller.is_running():
