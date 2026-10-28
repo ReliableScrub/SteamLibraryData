@@ -527,6 +527,7 @@ def save_steam_classifications(classifications):
         "dlc",
         "video",
         "hardware",
+        "test",
         "unknown",
     }
 

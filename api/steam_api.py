@@ -4,6 +4,7 @@ import time
 import requests
 
 from game import Game
+from local_steam import get_local_app_types
 
 STORE_APP_LIST_URL = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
 
@@ -373,6 +374,22 @@ def classify_owned_apps(
                 f"AppID {app_id}: "
                 f"{sorted(matched_types)}"
             )
+
+    _raise_if_classification_cancelled(cancel_requested)
+
+    unknown_app_ids = {
+        app_id
+        for app_id, steam_type in classifications.items()
+        if steam_type == "unknown"
+    }
+
+    if unknown_app_ids:
+        local_classifications = get_local_app_types(unknown_app_ids)
+
+        for app_id, steam_type in local_classifications.items():
+            classifications[app_id] = steam_type
+
+    _raise_if_classification_cancelled(cancel_requested)
 
     return classifications
 

@@ -5,7 +5,6 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from game_classification import GameClassifier
 from game_updates import (
-    update_achievements,
     update_hltb,
     update_metadata,
 )
@@ -16,6 +15,7 @@ from storage.database import (
     save_steam_classifications,
 )
 from workers import (
+    AchievementUpdateWorker,
     BatchUpdateWorker,
     SteamClassificationWorker,
     SteamLibraryRefreshWorker,
@@ -497,21 +497,13 @@ class UpdateController(QObject):
         if steam_id is None:
             return "steam_id_required"
 
-        steam_api_key = self.steam_api_key
-
-        def achievement_updater(game):
-            update_achievements(
-                game,
-                steam_id,
-                steam_api_key,
-            )
-
         return self._start_batch(
             games=games,
-            updater=achievement_updater,
+            updater=None,
             source="achievements",
             task_name="Changed achievements",
             action_text="Refreshing changed achievements for",
+            steam_id=steam_id,
         )
 
     def _start_classification_followup(self, mode, steam_id):
@@ -617,6 +609,9 @@ class UpdateController(QObject):
 
         if counts.get("hardware", 0):
             parts.append(f"{counts['hardware']} hardware")
+
+        if counts.get("test", 0):
+            parts.append(f"{counts['test']} test")
 
         parts.append(f"{counts.get('unknown', 0)} unknown")
 
@@ -866,21 +861,16 @@ class UpdateController(QObject):
         if not games:
             return "nothing"
 
-        steam_api_key = self.steam_api_key
-
-        def achievement_updater(game):
-            update_achievements(
-                game,
-                steam_id,
-                steam_api_key,
-            )
+        if steam_id is None:
+            return "steam_id_required"
 
         return self._start_batch(
             games=games,
-            updater=achievement_updater,
+            updater=None,
             source="achievements",
             task_name="Recent achievements",
             action_text="Refreshing recent achievements for",
+            steam_id=steam_id,
         )
 
     def start_achievement_batch(self, steam_id):
@@ -894,20 +884,146 @@ class UpdateController(QObject):
         if not games:
             return "nothing"
 
-        steam_api_key = self.steam_api_key
+        if steam_id is None:
+            return "steam_id_required"
 
-        def achievement_updater(game):
-            update_achievements(game, steam_id, steam_api_key)
+        games = games[:BATCH_SIZE]
 
         return self._start_batch(
-            games=games[:BATCH_SIZE],
-            updater=achievement_updater,
+            games=games,
+            updater=None,
             source="achievements",
             task_name="Achievements",
             action_text="Checking achievements for",
+            steam_id=steam_id,
         )
 
-    def _start_batch(self, games, updater, source, task_name, action_text):
+    @staticmethod
+    def _copy_hltb_state(source_game, target_game):
+        for attribute in (
+            "hltb_main",
+            "hltb_main_extra",
+            "hltb_completionist",
+            "hltb_all_styles",
+            "hltb_match_name",
+            "hltb_similarity",
+            "hltb_game_id",
+            "hltb_web_link",
+            "hltb_match_status",
+            "hltb_checked",
+            "hltb_updated_at",
+        ):
+            setattr(target_game, attribute, getattr(source_game, attribute, None))
+
+    def start_selected_refresh(
+        self,
+        source,
+        games,
+        steam_id=None,
+    ):
+        if self.is_running():
+            return "busy"
+
+        controller_by_app_id = {game.app_id: game for game in self.games}
+
+        selected_games = []
+        requested_games = {}
+        seen_app_ids = set()
+
+        for requested_game in games:
+            if requested_game is None:
+                continue
+
+            app_id = requested_game.app_id
+
+            if app_id in seen_app_ids:
+                continue
+
+            controller_game = controller_by_app_id.get(app_id)
+
+            if controller_game is None:
+                continue
+
+            seen_app_ids.add(app_id)
+            selected_games.append(controller_game)
+            requested_games[app_id] = requested_game
+
+        if not selected_games:
+            return "nothing"
+
+        if source == "metadata":
+            return self._start_batch(
+                games=selected_games,
+                updater=update_metadata,
+                source="metadata",
+                task_name="Selected metadata refresh",
+                action_text="Refreshing metadata for",
+            )
+
+        classifier = self._classifier()
+        eligible_games = [
+            game for game in selected_games if classifier.is_backlog_eligible(game)
+        ]
+
+        if not eligible_games:
+            return "nothing"
+
+        if source == "hltb":
+            # An explicit Refresh Selected action must behave like the single-game
+            # HLTB refresh: perform a genuinely fresh lookup instead of reusing
+            # process-local query results from an earlier bulk/stale-data run.
+            # The batch worker may still request cancellation between games; we
+            # intentionally do not pass that callback into update_hltb(), because
+            # hltb_api treats a callback as a cache-aware bulk lookup.
+            requested_eligible_games = []
+
+            for controller_game in eligible_games:
+                requested_game = requested_games.get(
+                    controller_game.app_id,
+                    controller_game,
+                )
+                requested_eligible_games.append(requested_game)
+
+            def selected_hltb_updater(game, cancel_requested=None):
+                update_hltb(game)
+
+                controller_game = controller_by_app_id.get(game.app_id)
+
+                if controller_game is not None and controller_game is not game:
+                    self._copy_hltb_state(game, controller_game)
+
+            return self._start_batch(
+                games=requested_eligible_games,
+                updater=selected_hltb_updater,
+                source="hltb",
+                task_name="Selected HLTB refresh",
+                action_text="Refreshing HLTB for",
+            )
+
+        if source == "achievements":
+            if steam_id is None:
+                return "steam_id_required"
+
+            return self._start_batch(
+                games=eligible_games,
+                updater=None,
+                source="achievements",
+                task_name="Selected achievement refresh",
+                action_text="Refreshing achievements for",
+                steam_id=steam_id,
+            )
+
+        return "unknown_source"
+
+    def _start_batch(
+        self,
+        games,
+        updater,
+        source,
+        task_name,
+        action_text,
+        steam_id=None,
+    ):
         if self.is_running():
             return "busy"
 
@@ -920,13 +1036,23 @@ class UpdateController(QObject):
         self.progress_changed.emit(source, 0, len(games), True)
 
         self._batch_thread = QThread()
-        self._batch_worker = BatchUpdateWorker(
-            games,
-            updater,
-            task_name,
-            action_text,
-            cancel_aware=(source == "hltb"),
-        )
+
+        if source == "achievements":
+            self._batch_worker = AchievementUpdateWorker(
+                games,
+                steam_id,
+                self.steam_api_key,
+                task_name,
+                action_text,
+            )
+        else:
+            self._batch_worker = BatchUpdateWorker(
+                games,
+                updater,
+                task_name,
+                action_text,
+                cancel_aware=(source == "hltb"),
+            )
 
         self._batch_worker.moveToThread(self._batch_thread)
         self._batch_thread.started.connect(self._batch_worker.run)
@@ -1090,20 +1216,12 @@ class UpdateController(QObject):
             )
 
         if achievement_games:
-            steam_api_key = self.steam_api_key
-
-            def achievement_updater(game):
-                update_achievements(
-                    game,
-                    steam_id,
-                    steam_api_key,
-                )
-
             self._start_combined_source(
                 source="achievements",
                 games=achievement_games,
-                updater=achievement_updater,
+                updater=None,
                 action_text="Checking achievements for",
+                steam_id=steam_id,
             )
 
         self.busy_changed.emit(True)
@@ -1115,17 +1233,28 @@ class UpdateController(QObject):
         games,
         updater,
         action_text,
+        steam_id=None,
     ):
         self.progress_changed.emit(source, 0, len(games), True)
 
         thread = QThread()
-        worker = BatchUpdateWorker(
-            games,
-            updater,
-            self._source_title(source),
-            action_text,
-            cancel_aware=(source == "hltb"),
-        )
+
+        if source == "achievements":
+            worker = AchievementUpdateWorker(
+                games,
+                steam_id,
+                self.steam_api_key,
+                self._source_title(source),
+                action_text,
+            )
+        else:
+            worker = BatchUpdateWorker(
+                games,
+                updater,
+                self._source_title(source),
+                action_text,
+                cancel_aware=(source == "hltb"),
+            )
 
         self._combined_threads[source] = thread
         self._combined_workers[source] = worker

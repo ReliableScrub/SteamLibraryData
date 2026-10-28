@@ -237,7 +237,7 @@ class RecommendationsTab(QWidget):
         self.for_you_summary.setVisible(False)
 
         self.for_you_match_badge = BadgeLabel("TOP PICK", tone="accent")
-        self.for_you_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.for_you_score_badge = BadgeLabel("- MATCH", tone="accent")
         self.for_you_status_badge = BadgeLabel("", tone="neutral")
         self.for_you_type_badge = BadgeLabel("", tone="neutral")
         self.for_you_reception_badge = BadgeLabel("", tone="neutral")
@@ -316,7 +316,7 @@ class RecommendationsTab(QWidget):
         self.similar_summary.setVisible(False)
 
         self.similar_match_badge = BadgeLabel("SIMILARITY", tone="accent")
-        self.similar_score_badge = BadgeLabel("— MATCH", tone="accent")
+        self.similar_score_badge = BadgeLabel("- MATCH", tone="accent")
         self.similar_status_badge = BadgeLabel("", tone="neutral")
         self.similar_type_badge = BadgeLabel("", tone="neutral")
         self.similar_reception_badge = BadgeLabel("", tone="neutral")
@@ -406,7 +406,7 @@ class RecommendationsTab(QWidget):
         text = f"{percent:.0f}% positive ({total:,} reviews)"
 
         if total < PUBLIC_RECEPTION_MIN_REVIEWS:
-            text += " — Too few reviews to affect recommendations"
+            text += " - Too few reviews to affect recommendations"
 
         return text
 
@@ -1616,14 +1616,14 @@ class RecommendationsTab(QWidget):
 
         self.for_you_title.setText(title)
         self.for_you_match_badge.set_badge("TOP PICK", "neutral")
-        self.for_you_score_badge.set_badge("— MATCH", "neutral")
+        self.for_you_score_badge.set_badge("- MATCH", "neutral")
         self.for_you_status_badge.set_badge("NO SELECTION", "neutral")
-        self.for_you_type_badge.set_badge("—", "neutral")
-        self.for_you_reception_badge.set_badge("—", "neutral")
+        self.for_you_type_badge.set_badge("-", "neutral")
+        self.for_you_reception_badge.set_badge("-", "neutral")
         self.for_you_description.setText(message)
 
         for tile in self.for_you_stats.values():
-            tile.set_value("—")
+            tile.set_value("-")
 
         self.for_you_details.clear()
 
@@ -2080,7 +2080,7 @@ class RecommendationsTab(QWidget):
                 continue
 
             display_text = (
-                f"{game.name} — {self._friendly_score(score.adjusted_similarity)}"
+                f"{game.name} - {self._friendly_score(score.adjusted_similarity)}"
             )
 
             self.similar_result_combo.addItem(
@@ -2222,15 +2222,15 @@ class RecommendationsTab(QWidget):
 
         self.similar_title.setText(title)
         self.similar_match_badge.set_badge("SIMILARITY", "neutral")
-        self.similar_score_badge.set_badge("— MATCH", "neutral")
+        self.similar_score_badge.set_badge("- MATCH", "neutral")
         self.similar_status_badge.set_badge("NO SELECTION", "neutral")
-        self.similar_type_badge.set_badge("—", "neutral")
-        self.similar_reception_badge.set_badge("—", "neutral")
+        self.similar_type_badge.set_badge("-", "neutral")
+        self.similar_reception_badge.set_badge("-", "neutral")
         self.similar_context_label.setText("")
         self.similar_description.setText(message)
 
         for tile in self.similar_stats.values():
-            tile.set_value("—")
+            tile.set_value("-")
 
         self.similar_details.clear()
 
@@ -2260,7 +2260,7 @@ class RecommendationsTab(QWidget):
     @staticmethod
     def _format_hours(value):
         if value is None:
-            return "—"
+            return "-"
 
         return f"{value:.1f} h"
 
@@ -2277,7 +2277,7 @@ class RecommendationsTab(QWidget):
         )
 
     def _empty_hltb_text(self):
-        return "Main Story: —\nMain + Extra: —\nCompletionist: —\nAll Styles: —"
+        return "Main Story: -\nMain + Extra: -\nCompletionist: -\nAll Styles: -"
 
     def _request_image(
         self,

@@ -5,6 +5,8 @@ from PySide6.QtCore import QAbstractTableModel, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
 
+from api.hltb_api import is_friends_pass_title, is_non_main_hltb_title
+
 
 class GameTableModel(QAbstractTableModel):
     HEADERS: ClassVar[tuple[str, ...]] = (
@@ -33,6 +35,56 @@ class GameTableModel(QAbstractTableModel):
 
     def columnCount(self, parent=None):
         return len(self.HEADERS)
+
+    def _hltb_missing_label(self, game):
+        name = getattr(game, "name", "") or ""
+
+        if is_friends_pass_title(name) or is_non_main_hltb_title(name):
+            return "Skipped"
+
+        if self.steam_type_resolver is not None:
+            display_type = self.steam_type_resolver(game)
+            non_hltb_types = {
+                "Software",
+                "Unknown (Software)",
+                "DLC",
+                "Video",
+                "Hardware",
+                "Test / Beta",
+                "Unknown (Test / Beta)",
+                "Bonus Content",
+            }
+
+            if display_type in non_hltb_types:
+                return "Skipped"
+
+        if not getattr(game, "hltb_checked", False):
+            return "Not Checked"
+
+        status = getattr(game, "hltb_match_status", None)
+
+        if status == "review":
+            return "Review"
+
+        if status == "no_match":
+            return "Not Found"
+
+        if status == "matched":
+            return "N/A"
+
+        return "Unknown"
+
+    def hltb_display_text(self, game, metric=None, long_unit=False):
+        if metric is None:
+            metric = self.hltb_metric
+
+        hltb_time = game.hltb_time(metric)
+
+        if hltb_time is None:
+            return self._hltb_missing_label(game)
+
+        unit = "hours" if long_unit else "h"
+        return f"{hltb_time:.1f} {unit}"
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
@@ -84,12 +136,7 @@ class GameTableModel(QAbstractTableModel):
             return "★" * rating
 
         if column == 5:
-            hltb_time = game.hltb_time(self.hltb_metric)
-
-            if hltb_time is None:
-                return "Unknown"
-
-            return f"{hltb_time:.1f} h"
+            return self.hltb_display_text(game)
 
         if column == 6:
             if game.achievement_total is None or game.achievements_unlocked is None:

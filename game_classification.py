@@ -1,3 +1,5 @@
+import re
+
 GENRE_CANONICAL_NAMES = {
     "free to play": "Free To Play",
 }
@@ -25,6 +27,20 @@ def canonical_feature_key(name):
     return " ".join(name.split()).casefold()
 
 
+def is_bonus_content_title(name):
+    if not isinstance(name, str):
+        return False
+
+    normalized = " ".join(name.split()).casefold()
+
+    return bool(
+        re.search(
+            r"\bbonus\s+content\b",
+            normalized,
+        )
+    )
+
+
 class GameClassifier:
     def __init__(self, games=()):
         self.games = list(games)
@@ -39,6 +55,9 @@ class GameClassifier:
         software_tag_keys = set()
 
         for game in self.games:
+            if is_bonus_content_title(getattr(game, "name", "")):
+                continue
+
             raw_type = getattr(game, "steam_type", "unknown") or "unknown"
 
             if raw_type not in {"game", "software"}:
@@ -69,6 +88,9 @@ class GameClassifier:
 
         if callable(is_test_build) and is_test_build():
             return "test"
+
+        if is_bonus_content_title(getattr(game, "name", "")):
+            return "bonus"
 
         raw_type = getattr(game, "steam_type", "unknown") or "unknown"
 
@@ -107,6 +129,9 @@ class GameClassifier:
 
             return "Test / Beta"
 
+        if inferred == "bonus":
+            return "Bonus Content"
+
         if raw_type == "unknown":
             if inferred == "game":
                 return "Unknown (Game)"
@@ -129,6 +154,7 @@ class GameClassifier:
     def is_backlog_eligible(self, game):
         return self.inferred_steam_type(game) not in {
             "test",
+            "bonus",
             "software",
             "dlc",
             "video",

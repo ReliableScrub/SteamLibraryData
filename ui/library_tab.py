@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -34,6 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from api.hltb_api import get_hltb_candidate_by_reference
+from game_classification import GameClassifier
 from game_updates import (
     accept_hltb_candidate,
     set_hltb_no_match,
@@ -228,6 +231,33 @@ class SelectedGameRefreshController(QObject):
         self.busy_changed.emit(False)
 
 
+class ManualHltbLookupSignals(QObject):
+    result_ready = Signal(object, object)
+    failed = Signal(object, str)
+    finished = Signal()
+
+
+class ManualHltbLookupWorker(QRunnable):
+    def __init__(self, game, reference):
+        super().__init__()
+
+        self.game = game
+        self.reference = reference
+        self.signals = ManualHltbLookupSignals()
+
+    def run(self):
+        try:
+            candidate = get_hltb_candidate_by_reference(self.reference)
+            self.signals.result_ready.emit(self.game, candidate)
+        except Exception as error:  # noqa: BLE001
+            self.signals.failed.emit(
+                self.game,
+                f"{type(error).__name__}: {error}",
+            )
+        finally:
+            self.signals.finished.emit()
+
+
 class EscapeClearsLineEdit(QLineEdit):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape and self.text():
@@ -246,6 +276,7 @@ class LibraryTab(QWidget):
 
         self.games = games
         self.filtered_games = games
+        self.game_classifier = GameClassifier(games)
         self.selected_game = None
         self.current_game_pixmap = None
         self.header_sort_column = None
@@ -254,6 +285,8 @@ class LibraryTab(QWidget):
         self._selected_refresh_controller = SelectedGameRefreshController(self)
         self._selected_refresh_busy = False
         self._global_update_busy = False
+        self._manual_hltb_busy = False
+        self._manual_hltb_worker = None
         self.description_requests_in_flight = set()
         self._adjusting_columns = False
         self._preferred_column_widths = list(DEFAULT_LIBRARY_COLUMN_WIDTHS)
@@ -290,6 +323,7 @@ class LibraryTab(QWidget):
                 "All Types",
                 "Backlog Eligible",
                 "Game",
+                "Bonus Content",
                 "Test / Beta",
                 "Unknown (Test / Beta)",
                 "Unknown (Game)",
@@ -477,15 +511,13 @@ class LibraryTab(QWidget):
         self.table = QTableView()
         self.game_table_model = GameTableModel(self.filtered_games, self)
 
-        self.game_table_model.set_steam_type_resolver(
-            self.genre_tag_filter.display_steam_type
-        )
+        self.game_table_model.set_steam_type_resolver(self._display_steam_type)
 
         self.game_table_model.set_ratings(load_game_ratings())
 
         self.table.setModel(self.game_table_model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
 
         header = self.table.horizontalHeader()
@@ -579,11 +611,16 @@ class LibraryTab(QWidget):
 
         self.steam_page_button = QPushButton("Steam Page")
         self.hltb_page_button = QPushButton("HLTB Page")
+        self.set_hltb_match_button = QPushButton("Set HLTB Match...")
 
         self.steam_page_button.setEnabled(False)
         self.hltb_page_button.setEnabled(False)
+        self.set_hltb_match_button.setEnabled(False)
         self.hltb_page_button.setToolTip(
             "Open the accepted HowLongToBeat match for the selected game."
+        )
+        self.set_hltb_match_button.setToolTip(
+            "Manually assign a HowLongToBeat game by URL or numeric HLTB game ID."
         )
 
         self.refresh_hltb_button = QPushButton("HLTB")
@@ -691,7 +728,7 @@ class LibraryTab(QWidget):
         details_layout.addWidget(self.details_heading)
         details_layout.addWidget(self.game_details)
 
-        self.refresh_selected_label = QLabel("Refresh selected:")
+        self.refresh_selected_label = QLabel("Refresh current game:")
         details_layout.addWidget(self.refresh_selected_label)
 
         refresh_row = QHBoxLayout()
@@ -707,6 +744,7 @@ class LibraryTab(QWidget):
         action_row = QHBoxLayout()
         action_row.addWidget(self.steam_page_button)
         action_row.addWidget(self.hltb_page_button)
+        action_row.addWidget(self.set_hltb_match_button)
         action_row.addStretch()
         details_layout.addLayout(action_row)
         details_layout.addStretch()
@@ -733,6 +771,7 @@ class LibraryTab(QWidget):
             self.trailer_player,
             self.steam_page_button,
             self.hltb_page_button,
+            self.set_hltb_match_button,
         ]
 
         self._set_detail_content_visible(False)
@@ -818,13 +857,14 @@ class LibraryTab(QWidget):
 
         self.pick_button.clicked.connect(self.pick_random_game)
         self.table.selectionModel().selectionChanged.connect(
-            lambda *_: self.show_selected_game()
+            self._table_selection_changed
         )
         self.manual_status_combo.currentTextChanged.connect(self.change_manual_status)
         self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
         self.hltb_page_button.clicked.connect(self.open_selected_hltb_page)
+        self.set_hltb_match_button.clicked.connect(self.set_selected_hltb_match)
         self.reset_columns_button.clicked.connect(self.reset_table_columns)
 
         self.refresh_hltb_button.clicked.connect(
@@ -854,6 +894,7 @@ class LibraryTab(QWidget):
 
         if update_controller is not None:
             update_controller.busy_changed.connect(self._global_update_busy_changed)
+            update_controller.progress_changed.connect(self._update_progress_changed)
 
         self.splitter.splitterMoved.connect(self._splitter_moved)
         header = self.table.horizontalHeader()
@@ -897,29 +938,252 @@ class LibraryTab(QWidget):
 
     def set_games(self, games):
         self.games = games
+        self.game_classifier = GameClassifier(games)
 
         self.genre_tag_filter.set_available_from_games(games)
 
         self.refresh_data()
 
     def refresh_data(self):
+        scroll_state = self._capture_table_scroll_state()
+        self.game_classifier = GameClassifier(self.games)
+
         selected_app_id = (
             self.selected_game.app_id if self.selected_game is not None else None
         )
 
-        self.genre_tag_filter.set_available_from_games(self.games)
-        self.apply_filters()
+        try:
+            self.genre_tag_filter.set_available_from_games(self.games)
+            self.apply_filters()
 
-        if selected_app_id is None:
-            return
-
-        for row, game in enumerate(self.filtered_games):
-            if game.app_id == selected_app_id:
-                self.table.selectRow(row)
-
+            if selected_app_id is None:
                 return
 
-        self.clear_game_details()
+            for row, game in enumerate(self.filtered_games):
+                if game.app_id == selected_app_id:
+                    self.table.selectRow(row)
+                    return
+
+            self.clear_game_details()
+        finally:
+            self._restore_table_scroll_state(scroll_state)
+
+    def _capture_table_scroll_state(self):
+        return (
+            self.table.horizontalScrollBar().value(),
+            self.table.verticalScrollBar().value(),
+        )
+
+    def _restore_table_scroll_state(self, state):
+        horizontal_value, vertical_value = state
+
+        def restore():
+            horizontal_scroll = self.table.horizontalScrollBar()
+            vertical_scroll = self.table.verticalScrollBar()
+
+            horizontal_scroll.setValue(
+                min(horizontal_value, horizontal_scroll.maximum())
+            )
+            vertical_scroll.setValue(min(vertical_value, vertical_scroll.maximum()))
+
+        # A model reset can update scrollbar ranges on the next Qt event-loop
+        # turn. Restore immediately and once more after that geometry settles.
+        restore()
+        QTimer.singleShot(0, restore)
+
+    def _selected_games(self):
+        selection_model = self.table.selectionModel()
+
+        if selection_model is None:
+            return []
+
+        rows = sorted(
+            {index.row() for index in selection_model.selectedRows() if index.isValid()}
+        )
+
+        games = []
+
+        for row in rows:
+            game = self.game_table_model.game_at(row)
+
+            if game is not None:
+                games.append(game)
+
+        return games
+
+    def _table_selection_changed(self, *_):
+        if not self._selected_games():
+            self.clear_game_details()
+        else:
+            self.show_selected_game()
+
+        self._update_filter_summary()
+
+    def _display_steam_type(self, game):
+        return self.game_classifier.display_steam_type(game)
+
+    def _matches_type_filter(self, game, selected_type):
+        if selected_type == "All Types":
+            return True
+
+        raw_type = getattr(game, "steam_type", "unknown") or "unknown"
+        inferred_type = self.game_classifier.inferred_steam_type(game)
+
+        if selected_type == "Game":
+            return inferred_type == "game"
+
+        if selected_type == "Bonus Content":
+            return inferred_type == "bonus"
+
+        if selected_type == "Test / Beta":
+            return raw_type != "unknown" and inferred_type == "test"
+
+        if selected_type == "Unknown (Test / Beta)":
+            return raw_type == "unknown" and inferred_type == "test"
+
+        if selected_type == "Unknown (Game)":
+            return raw_type == "unknown" and inferred_type == "game"
+
+        if selected_type == "Software":
+            return inferred_type == "software"
+
+        if selected_type == "Unknown (Software)":
+            return raw_type == "unknown" and inferred_type == "software"
+
+        if selected_type == "Unknown":
+            return raw_type == "unknown" and inferred_type == "unknown"
+
+        type_values = {
+            "DLC": "dlc",
+            "Video": "video",
+            "Hardware": "hardware",
+        }
+
+        wanted_type = type_values.get(selected_type)
+
+        if wanted_type is None:
+            return False
+
+        return raw_type == wanted_type
+
+    def _selected_batch_games(self, source, games):
+        games = list(games)
+
+        if source in {"hltb", "achievements"}:
+            games = [
+                game for game in games if self.game_classifier.is_backlog_eligible(game)
+            ]
+
+        return games
+
+    def _selected_batch_unavailable_reason(self, source, games):
+        if self._global_update_busy:
+            return "Finish or cancel the current Maintenance update first."
+
+        if self._selected_refresh_busy:
+            return "Another selected-game refresh is already running."
+
+        if self._manual_hltb_busy:
+            return "Finish the manual HLTB lookup first."
+
+        eligible_games = self._selected_batch_games(source, games)
+
+        if not eligible_games:
+            return "None of the selected entries are eligible for this refresh."
+
+        if source == "achievements":
+            main_window = self._main_window()
+            steam_id = getattr(main_window, "steam_id", None)
+            steam_api_key = getattr(main_window, "steam_api_key", None)
+
+            if not steam_id:
+                return "A SteamID64 is required to refresh achievements."
+
+            if not steam_api_key:
+                return "A Steam Web API key is required to refresh achievements."
+
+        return None
+
+    def _refresh_selected_games(self, source, games):
+        games = self._selected_batch_games(source, games)
+        reason = self._selected_batch_unavailable_reason(source, games)
+
+        if reason is not None:
+            QMessageBox.information(
+                self,
+                "Refresh Unavailable",
+                reason,
+            )
+            return
+
+        main_window = self._main_window()
+        update_controller = getattr(
+            main_window,
+            "update_controller",
+            None,
+        )
+
+        if update_controller is None:
+            QMessageBox.warning(
+                self,
+                "Refresh Unavailable",
+                "The update controller is not available.",
+            )
+            return
+
+        steam_id = getattr(
+            main_window,
+            "steam_id",
+            None,
+        )
+
+        source_labels = {
+            "hltb": "HLTB",
+            "metadata": "Genre / Tags",
+            "achievements": "Achievements",
+        }
+
+        count = len(games)
+
+        result = update_controller.start_selected_refresh(
+            source,
+            games,
+            steam_id=steam_id,
+        )
+
+        if result == "started":
+            self._set_selected_refresh_status(
+                f"Refreshing {source_labels[source]} for {count} selected "
+                f"{'game' if count == 1 else 'games'}...",
+                "accent",
+            )
+            return
+
+        messages = {
+            "busy": "Another update is already running.",
+            "nothing": "None of the selected entries are eligible for this refresh.",
+            "steam_id_required": "A SteamID64 is required to refresh achievements.",
+            "unknown_source": "That refresh source is not supported.",
+        }
+
+        QMessageBox.information(
+            self,
+            "Refresh Unavailable",
+            messages.get(result, f"Could not start the refresh ({result})."),
+        )
+
+    @staticmethod
+    def _open_game_steam_page(game):
+        QDesktopServices.openUrl(
+            QUrl(f"https://store.steampowered.com/app/{game.app_id}/")
+        )
+
+    @staticmethod
+    def _open_game_hltb_page(game):
+        web_link = getattr(game, "hltb_web_link", None)
+
+        if web_link:
+            QDesktopServices.openUrl(QUrl(web_link))
 
     def _show_table_context_menu(self, position):
         index = self.table.indexAt(position)
@@ -927,43 +1191,80 @@ class LibraryTab(QWidget):
         if not index.isValid():
             return
 
-        self.table.selectRow(index.row())
+        selected_rows = {
+            selected_index.row()
+            for selected_index in self.table.selectionModel().selectedRows()
+        }
+
+        # Normal desktop behavior: right-clicking inside the existing selection
+        # preserves it; right-clicking elsewhere makes that row the selection.
+        if index.row() not in selected_rows:
+            self.table.clearSelection()
+            self.table.selectRow(index.row())
+
         game = self.game_table_model.game_at(index.row())
 
         if game is None:
             return
 
+        selected_games = self._selected_games()
+
+        if not selected_games:
+            selected_games = [game]
+
         menu = QMenu(self)
         open_action = menu.addAction("Open Steam Page")
         open_hltb_action = menu.addAction("Open HLTB Page")
         open_hltb_action.setEnabled(bool(getattr(game, "hltb_web_link", None)))
+        set_hltb_match_action = menu.addAction("Set HLTB Match...")
+        set_hltb_match_action.setEnabled(
+            not self._global_update_busy
+            and not self._selected_refresh_busy
+            and not self._manual_hltb_busy
+        )
         menu.addSeparator()
-        refresh_hltb_action = menu.addAction("Refresh HLTB")
-        refresh_metadata_action = menu.addAction("Refresh Genre / Tags")
-        refresh_achievements_action = menu.addAction("Refresh Achievements")
+
+        refresh_menu = menu.addMenu(f"Refresh Selected ({len(selected_games)})")
+        refresh_hltb_action = refresh_menu.addAction("HLTB")
+        refresh_metadata_action = refresh_menu.addAction("Genre / Tags")
+        refresh_achievements_action = refresh_menu.addAction("Achievements")
 
         refresh_hltb_action.setEnabled(
-            self._selected_refresh_unavailable_reason("hltb") is None
+            self._selected_batch_unavailable_reason(
+                "hltb",
+                selected_games,
+            )
+            is None
         )
         refresh_metadata_action.setEnabled(
-            self._selected_refresh_unavailable_reason("metadata") is None
+            self._selected_batch_unavailable_reason(
+                "metadata",
+                selected_games,
+            )
+            is None
         )
         refresh_achievements_action.setEnabled(
-            self._selected_refresh_unavailable_reason("achievements") is None
+            self._selected_batch_unavailable_reason(
+                "achievements",
+                selected_games,
+            )
+            is None
         )
 
         action = menu.exec(self.table.viewport().mapToGlobal(position))
 
         if action == open_action:
-            self.open_selected_steam_page()
+            self._open_game_steam_page(game)
         elif action == open_hltb_action:
-            self.open_selected_hltb_page()
+            self._open_game_hltb_page(game)
+        elif action == set_hltb_match_action:
+            self._set_hltb_match_for_game(game)
         elif action == refresh_hltb_action:
-            self._refresh_selected_game("hltb")
+            self._refresh_selected_games("hltb", selected_games)
         elif action == refresh_metadata_action:
-            self._refresh_selected_game("metadata")
+            self._refresh_selected_games("metadata", selected_games)
         elif action == refresh_achievements_action:
-            self._refresh_selected_game("achievements")
+            self._refresh_selected_games("achievements", selected_games)
 
     def current_hltb_time(self, game):
         metric = self.hltb_metric_filter.currentText()
@@ -1674,7 +1975,7 @@ class LibraryTab(QWidget):
             1
             for game in self.games
             if game.effective_status() == "Backlog"
-            and self.genre_tag_filter.is_backlog_eligible(game)
+            and self.game_classifier.is_backlog_eligible(game)
         )
         completed = sum(
             1 for game in self.games if game.effective_status() == "Completed"
@@ -1688,6 +1989,11 @@ class LibraryTab(QWidget):
 
         if specs:
             summary += f"  •  {len(specs)} filters active"
+
+        selected_count = len(self._selected_games())
+
+        if selected_count > 1:
+            summary += f"  •  {selected_count} selected"
 
         self.summary_label.setText(summary)
 
@@ -1957,7 +2263,7 @@ class LibraryTab(QWidget):
                 game
                 for game in filtered_games
                 if game.effective_status() == "Backlog"
-                and self.genre_tag_filter.is_backlog_eligible(game)
+                and self.game_classifier.is_backlog_eligible(game)
             ]
 
         elif selected_status != "All":
@@ -1972,14 +2278,14 @@ class LibraryTab(QWidget):
             filtered_games = [
                 game
                 for game in filtered_games
-                if self.genre_tag_filter.is_backlog_eligible(game)
+                if self.game_classifier.is_backlog_eligible(game)
             ]
 
         elif selected_type != "All Types":
             filtered_games = [
                 game
                 for game in filtered_games
-                if self.genre_tag_filter.matches_type_filter(
+                if self._matches_type_filter(
                     game,
                     selected_type,
                 )
@@ -2211,12 +2517,13 @@ class LibraryTab(QWidget):
     def _update_game_details_text(self, game):
         playtime_hours = game.playtime_minutes / 60
         hltb_metric = self.hltb_metric_filter.currentText()
-        hltb_time = game.hltb_time(hltb_metric)
+        game.hltb_time(hltb_metric)
 
-        if hltb_time is None:
-            hltb_text = "Unknown"
-        else:
-            hltb_text = f"{hltb_time:.1f} hours"
+        hltb_text = self.game_table_model.hltb_display_text(
+            game,
+            metric=hltb_metric,
+            long_unit=True,
+        )
 
         if game.achievement_total is None or game.achievements_unlocked is None:
             achievement_text = "Unknown"
@@ -2249,7 +2556,7 @@ class LibraryTab(QWidget):
         else:
             recent_activity_text = f"{recent_minutes} minutes"
 
-        steam_type_text = self.genre_tag_filter.display_steam_type(game)
+        steam_type_text = self._display_steam_type(game)
         reception_text = self._public_reception_text(game)
         description_text = self._description_text(game)
 
@@ -2275,10 +2582,21 @@ class LibraryTab(QWidget):
         )
 
     def show_selected_game(self):
+        selected_rows = sorted(
+            {
+                index.row()
+                for index in self.table.selectionModel().selectedRows()
+                if index.isValid()
+            }
+        )
+
+        if not selected_rows:
+            return
+
         row = self.table.currentIndex().row()
 
-        if row < 0:
-            return
+        if row not in selected_rows:
+            row = selected_rows[-1]
 
         game = self.game_table_model.game_at(row)
 
@@ -2297,7 +2615,7 @@ class LibraryTab(QWidget):
         status = game.effective_status()
         self.status_value.set_badge(status.upper(), self._status_tone(status))
 
-        steam_type = self.genre_tag_filter.display_steam_type(game)
+        steam_type = self._display_steam_type(game)
         self.type_badge.set_badge(steam_type.upper(), "neutral")
         self.type_badge.setVisible(True)
 
@@ -2331,6 +2649,7 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(True)
         self.hltb_page_button.setEnabled(bool(getattr(game, "hltb_web_link", None)))
+        self.set_hltb_match_button.setEnabled(True)
         self._set_selected_refresh_status("")
         self._set_detail_content_visible(True)
         self._update_selected_refresh_enabled()
@@ -2617,6 +2936,9 @@ class LibraryTab(QWidget):
         if self._selected_refresh_busy:
             return "Another selected-game refresh is already running."
 
+        if self._manual_hltb_busy:
+            return "Finish the manual HLTB lookup first."
+
         if source == "achievements":
             main_window = self._main_window()
             steam_id = getattr(main_window, "steam_id", None)
@@ -2688,6 +3010,32 @@ class LibraryTab(QWidget):
         self._global_update_busy = busy
         self._update_selected_refresh_enabled()
 
+    def _update_progress_changed(self, source, completed, total, active):
+        if not active or completed <= 0:
+            return
+
+        if source == "hltb":
+            self._refresh_live_table_column(5)
+        elif source == "achievements":
+            self._refresh_live_table_column(6)
+        else:
+            return
+
+        if self.selected_game is not None:
+            self._update_game_details_text(self.selected_game)
+
+    def _refresh_live_table_column(self, column):
+        if not self.game_table_model.games:
+            return
+
+        self.game_table_model.dataChanged.emit(
+            self.game_table_model.index(0, column),
+            self.game_table_model.index(
+                len(self.game_table_model.games) - 1,
+                column,
+            ),
+        )
+
     def _update_selected_refresh_enabled(self):
         controls = (
             (
@@ -2711,6 +3059,14 @@ class LibraryTab(QWidget):
             reason = self._selected_refresh_unavailable_reason(source)
             button.setEnabled(reason is None)
             button.setToolTip(reason or enabled_tooltip)
+
+        manual_enabled = (
+            self.selected_game is not None
+            and not self._global_update_busy
+            and not self._selected_refresh_busy
+            and not self._manual_hltb_busy
+        )
+        self.set_hltb_match_button.setEnabled(manual_enabled)
 
     def _selected_refresh_succeeded(
         self,
@@ -2800,6 +3156,7 @@ class LibraryTab(QWidget):
 
         self.steam_page_button.setEnabled(False)
         self.hltb_page_button.setEnabled(False)
+        self.set_hltb_match_button.setEnabled(False)
         self._set_selected_refresh_status("")
         self._set_detail_content_visible(False)
         self._update_selected_refresh_enabled()
@@ -2824,6 +3181,157 @@ class LibraryTab(QWidget):
             return
 
         QDesktopServices.openUrl(QUrl(web_link))
+
+    @staticmethod
+    def _format_hltb_candidate_time(value):
+        if value is None:
+            return "N/A"
+
+        return f"{value:.1f} h"
+
+    def set_selected_hltb_match(self):
+        if self.selected_game is None:
+            return
+
+        self._set_hltb_match_for_game(self.selected_game)
+
+    def _set_hltb_match_for_game(self, game):
+        if self._global_update_busy:
+            QMessageBox.information(
+                self,
+                "HLTB Match Unavailable",
+                "Finish or cancel the current Maintenance update first.",
+            )
+            return
+
+        if self._selected_refresh_busy or self._manual_hltb_busy:
+            QMessageBox.information(
+                self,
+                "HLTB Match Unavailable",
+                "Another selected-game HLTB operation is already running.",
+            )
+            return
+
+        reference, accepted = QInputDialog.getText(
+            self,
+            "Set HLTB Match",
+            (
+                f"Steam game: {game.name}\n\n"
+                "Enter a HowLongToBeat game URL or numeric HLTB game ID:"
+            ),
+        )
+
+        if not accepted:
+            return
+
+        reference = reference.strip()
+
+        if not reference:
+            return
+
+        self._manual_hltb_busy = True
+        self._update_selected_refresh_enabled()
+
+        if self.selected_game is not None and self.selected_game.app_id == game.app_id:
+            self._set_selected_refresh_status(
+                f"Loading HLTB entry for {game.name}...",
+                "accent",
+            )
+
+        worker = ManualHltbLookupWorker(game, reference)
+        self._manual_hltb_worker = worker
+        worker.signals.result_ready.connect(self._manual_hltb_lookup_succeeded)
+        worker.signals.failed.connect(self._manual_hltb_lookup_failed)
+        worker.signals.finished.connect(self._manual_hltb_lookup_finished)
+        QThreadPool.globalInstance().start(worker)
+
+    def _manual_hltb_lookup_succeeded(self, game, candidate):
+        steam_app_ids = set(candidate.get("steam_app_ids") or [])
+
+        if game.app_id in steam_app_ids:
+            verification_text = f"Steam AppID matches: {game.app_id}."
+        elif steam_app_ids:
+            listed_ids = ", ".join(str(app_id) for app_id in sorted(steam_app_ids))
+            verification_text = (
+                "WARNING: This HLTB entry is associated with a different "
+                f"Steam AppID ({listed_ids}).\n"
+                f"This library game is Steam AppID {game.app_id}.\n"
+                "Only continue if you intentionally want to override the automatic match."
+            )
+        else:
+            verification_text = (
+                "WARNING: This HLTB entry does not provide a Steam AppID, so the "
+                "match cannot be automatically verified.\n"
+                "Only continue if you have checked the HLTB page yourself."
+            )
+
+        message = (
+            f"Steam game: {game.name}\n"
+            f"Steam AppID: {game.app_id}\n\n"
+            f"HLTB title: {candidate['game_name']}\n"
+            f"HLTB game ID: {candidate['game_id']}\n"
+            f"Main Story: {self._format_hltb_candidate_time(candidate.get('main_story'))}\n"
+            f"Main + Extra: {self._format_hltb_candidate_time(candidate.get('main_extra'))}\n"
+            f"Completionist: {self._format_hltb_candidate_time(candidate.get('completionist'))}\n"
+            f"All Styles: {self._format_hltb_candidate_time(candidate.get('all_styles'))}\n\n"
+            f"{verification_text}\n\n"
+            "Use this HLTB entry for the Steam game?"
+        )
+
+        result = QMessageBox.question(
+            self,
+            "Confirm HLTB Match",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if result != QMessageBox.StandardButton.Yes:
+            if (
+                self.selected_game is not None
+                and self.selected_game.app_id == game.app_id
+            ):
+                self._set_selected_refresh_status("Manual HLTB match cancelled.")
+            return
+
+        try:
+            accept_hltb_candidate(game, candidate)
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Could Not Save HLTB Match",
+                f"The HLTB match could not be saved:\n\n{error}",
+            )
+            return
+
+        self.refresh_data()
+
+        if self.selected_game is not None and self.selected_game.app_id == game.app_id:
+            self.show_selected_game()
+            self._set_selected_refresh_status(
+                f"Manual HLTB match set to {candidate['game_name']}.",
+                "positive",
+            )
+
+        self.data_changed.emit()
+
+    def _manual_hltb_lookup_failed(self, game, error_message):
+        if self.selected_game is not None and self.selected_game.app_id == game.app_id:
+            self._set_selected_refresh_status(
+                f"Could not load the manual HLTB match for {game.name}.",
+                "danger",
+            )
+
+        QMessageBox.warning(
+            self,
+            "Could Not Load HLTB Match",
+            f"Could not load that HowLongToBeat entry:\n\n{error_message}",
+        )
+
+    def _manual_hltb_lookup_finished(self):
+        self._manual_hltb_worker = None
+        self._manual_hltb_busy = False
+        self._update_selected_refresh_enabled()
 
     def update_media_sizes(self):
         if not hasattr(self, "details_content"):
@@ -3062,7 +3570,7 @@ class LibraryTab(QWidget):
                 games,
                 key=lambda game: (
                     type_order.get(
-                        self.genre_tag_filter.display_steam_type(game),
+                        self._display_steam_type(game),
                         99,
                     ),
                     game.name.lower(),
