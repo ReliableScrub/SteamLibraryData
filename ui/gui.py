@@ -1,7 +1,7 @@
 import sys
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -31,7 +31,9 @@ from storage.database import (
 )
 from storage.image_cache import clear_image_cache
 from storage.settings import (
+    get_active_main_tab,
     get_appearance,
+    set_active_main_tab,
     set_appearance,
 )
 from storage.settings import (
@@ -96,7 +98,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 650)
         self.start_maximized = restore_window_state(self)
         self._create_tabs()
+        self._restore_main_tab()
         self._apply_interaction_cursors()
+        self._create_shortcuts()
 
         self._bind_tabs()
         self._bind_update_controller()
@@ -110,6 +114,38 @@ class MainWindow(QMainWindow):
     def _apply_interaction_cursors(self):
         for button in self.findChildren(QPushButton):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _create_shortcuts(self):
+        self.help_shortcut = QShortcut(QKeySequence("F1"), self)
+        self.help_shortcut.activated.connect(self.show_help_faq)
+
+        self.refresh_library_shortcut = QShortcut(QKeySequence("F5"), self)
+        self.refresh_library_shortcut.activated.connect(
+            self._refresh_library_from_shortcut
+        )
+
+    def _refresh_library_from_shortcut(self):
+        if self.update_controller.is_running():
+            return
+
+        if self.recommendations_tab.recommendation_build_running():
+            return
+
+        self.start_library_refresh()
+
+    def _restore_main_tab(self):
+        active_tab = get_active_main_tab()
+
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) == active_tab:
+                self.tabs.setCurrentIndex(index)
+                return
+
+    def _main_tab_changed(self, index):
+        if not 0 <= index < self.tabs.count():
+            return
+
+        set_active_main_tab(self.tabs.tabText(index))
 
     def _create_contact_tab(self):
         tab = QWidget()
@@ -229,6 +265,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
     def _bind_tabs(self):
+        self.tabs.currentChanged.connect(self._main_tab_changed)
         self.library_tab.data_changed.connect(self._library_data_changed)
         self.recommendations_tab.build_busy_changed.connect(
             self._recommendation_busy_changed

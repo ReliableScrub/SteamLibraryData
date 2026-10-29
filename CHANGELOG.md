@@ -3,6 +3,29 @@
 **Baseline:** v1.0.0  
 **Current checkpoint:** Post-1.0 work, before v1.1.0
 
+## Current
+
+- Achievement sorting now keeps real progress, `None`, and `Unknown` in separate groups.
+- Up / Down / Home / End now navigate Library rows reliably while the table is focused.
+- Added `F1` for Help / FAQ.
+- Added `F5` for Refresh Steam Library.
+- Added **Launch Game** / **Launch in Steam** actions.
+- Added bulk status changes for selected games:
+  - Automatic
+  - Completed
+  - On Hold
+  - Dropped
+- Added bulk ratings for selected games, including clearing ratings.
+- Added right-click copy actions for:
+  - game name
+  - Steam AppID
+  - Steam URL
+  - HLTB URL
+- The last active main tab is remembered between launches.
+- Steam Type sorting now includes Bonus Content in its normal ordering.
+- Multi-selection counts were already present in the Library summary and remain unchanged.
+
+
 ## Done since 1.0
 
 ### Steam / classification

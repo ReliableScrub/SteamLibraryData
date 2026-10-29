@@ -3,6 +3,7 @@ import json
 from storage.paths import SETTINGS_FILE
 
 VALID_APPEARANCES = {"System", "Light", "Dark"}
+VALID_MAIN_TABS = {"Library", "Recommendations", "Maintenance", "Contact"}
 
 
 def load_settings():
@@ -98,4 +99,23 @@ def get_window_settings():
 def set_window_settings(window):
     settings = load_settings()
     settings["window"] = window
+    save_settings(settings)
+
+
+def get_active_main_tab():
+    settings = load_settings()
+    active_tab = settings.get("active_main_tab", "Library")
+
+    if active_tab not in VALID_MAIN_TABS:
+        return "Library"
+
+    return active_tab
+
+
+def set_active_main_tab(active_tab):
+    if active_tab not in VALID_MAIN_TABS:
+        raise ValueError(f"Invalid main tab: {active_tab}")
+
+    settings = load_settings()
+    settings["active_main_tab"] = active_tab
     save_settings(settings)

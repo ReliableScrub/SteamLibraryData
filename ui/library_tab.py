@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from PySide6.QtCore import (
     QEvent,
+    QItemSelectionModel,
     QObject,
     QRunnable,
     Qt,
@@ -16,6 +17,7 @@ from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QDialog,
     QFrame,
@@ -268,6 +270,46 @@ class EscapeClearsLineEdit(QLineEdit):
         super().keyPressEvent(event)
 
 
+class LibraryTableView(QTableView):
+    def keyPressEvent(self, event):
+        plain_navigation = event.modifiers() == Qt.KeyboardModifier.NoModifier
+        navigation_keys = {
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_Home,
+            Qt.Key.Key_End,
+        }
+
+        if plain_navigation and event.key() in navigation_keys:
+            model = self.model()
+
+            if model is not None and model.rowCount() > 0:
+                current_row = self.currentIndex().row()
+
+                if event.key() == Qt.Key.Key_Home:
+                    target_row = 0
+                elif event.key() == Qt.Key.Key_End:
+                    target_row = model.rowCount() - 1
+                elif current_row < 0:
+                    target_row = 0
+                elif event.key() == Qt.Key.Key_Up:
+                    target_row = max(current_row - 1, 0)
+                else:
+                    target_row = min(current_row + 1, model.rowCount() - 1)
+
+                index = model.index(target_row, 0)
+                self.setCurrentIndex(index)
+                self.selectRow(target_row)
+                self.scrollTo(
+                    index,
+                    QAbstractItemView.ScrollHint.EnsureVisible,
+                )
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+
 class LibraryTab(QWidget):
     data_changed = Signal()
 
@@ -508,7 +550,7 @@ class LibraryTab(QWidget):
         )
 
     def _create_table(self):
-        self.table = QTableView()
+        self.table = LibraryTableView()
         self.game_table_model = GameTableModel(self.filtered_games, self)
 
         self.game_table_model.set_steam_type_resolver(self._display_steam_type)
@@ -609,10 +651,13 @@ class LibraryTab(QWidget):
         self.empty_details_label.setProperty("emptyState", True)
         self.empty_details_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self.launch_game_button = QPushButton("Launch Game")
         self.steam_page_button = QPushButton("Steam Page")
         self.hltb_page_button = QPushButton("HLTB Page")
         self.set_hltb_match_button = QPushButton("Set HLTB Match...")
 
+        self.launch_game_button.setEnabled(False)
+        self.launch_game_button.setToolTip("Launch the selected game through Steam.")
         self.steam_page_button.setEnabled(False)
         self.hltb_page_button.setEnabled(False)
         self.set_hltb_match_button.setEnabled(False)
@@ -742,6 +787,7 @@ class LibraryTab(QWidget):
         details_layout.addWidget(self.trailer_player)
 
         action_row = QHBoxLayout()
+        action_row.addWidget(self.launch_game_button)
         action_row.addWidget(self.steam_page_button)
         action_row.addWidget(self.hltb_page_button)
         action_row.addWidget(self.set_hltb_match_button)
@@ -769,6 +815,7 @@ class LibraryTab(QWidget):
             self.refresh_achievements_button,
             self.selected_refresh_status,
             self.trailer_player,
+            self.launch_game_button,
             self.steam_page_button,
             self.hltb_page_button,
             self.set_hltb_match_button,
@@ -862,6 +909,7 @@ class LibraryTab(QWidget):
         self.manual_status_combo.currentTextChanged.connect(self.change_manual_status)
         self.rating_combo.currentIndexChanged.connect(self.change_game_rating)
 
+        self.launch_game_button.clicked.connect(self.launch_selected_game)
         self.steam_page_button.clicked.connect(self.open_selected_steam_page)
         self.hltb_page_button.clicked.connect(self.open_selected_hltb_page)
         self.set_hltb_match_button.clicked.connect(self.set_selected_hltb_match)
@@ -1173,10 +1221,21 @@ class LibraryTab(QWidget):
         )
 
     @staticmethod
+    def _launch_game_in_steam(game):
+        QDesktopServices.openUrl(QUrl(f"steam://run/{game.app_id}"))
+
+    @staticmethod
     def _open_game_steam_page(game):
         QDesktopServices.openUrl(
             QUrl(f"https://store.steampowered.com/app/{game.app_id}/")
         )
+
+    @staticmethod
+    def _copy_text(text):
+        clipboard = QApplication.clipboard()
+
+        if clipboard is not None:
+            clipboard.setText(str(text))
 
     @staticmethod
     def _open_game_hltb_page(game):
@@ -1184,6 +1243,93 @@ class LibraryTab(QWidget):
 
         if web_link:
             QDesktopServices.openUrl(QUrl(web_link))
+
+    def _restore_visible_selection(self, app_ids, preferred_app_id=None):
+        app_ids = set(app_ids)
+        selection_model = self.table.selectionModel()
+
+        if selection_model is None:
+            return
+
+        selection_model.clearSelection()
+        current_index = None
+
+        for row, game in enumerate(self.filtered_games):
+            if game.app_id not in app_ids:
+                continue
+
+            index = self.game_table_model.index(row, 0)
+            selection_model.select(
+                index,
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+
+            if current_index is None or game.app_id == preferred_app_id:
+                current_index = index
+
+        if current_index is None:
+            self.clear_game_details()
+            self._update_filter_summary()
+            return
+
+        selection_model.setCurrentIndex(
+            current_index,
+            QItemSelectionModel.SelectionFlag.NoUpdate,
+        )
+        self.table.scrollTo(
+            current_index,
+            QAbstractItemView.ScrollHint.EnsureVisible,
+        )
+        self.show_selected_game()
+        self._update_filter_summary()
+
+    def _set_manual_status_for_games(self, games, selected_status):
+        games = list(games)
+
+        if not games:
+            return
+
+        selected_ids = [game.app_id for game in games]
+        preferred_app_id = (
+            self.selected_game.app_id
+            if self.selected_game is not None
+            else selected_ids[0]
+        )
+
+        for game in games:
+            game.manual_status = (
+                None if selected_status == "Automatic" else selected_status
+            )
+            save_manual_status(game)
+
+        self.apply_filters()
+        self._restore_visible_selection(selected_ids, preferred_app_id)
+        self.data_changed.emit()
+
+    def _set_rating_for_games(self, games, rating):
+        games = list(games)
+
+        if not games:
+            return
+
+        selected_ids = [game.app_id for game in games]
+        preferred_app_id = (
+            self.selected_game.app_id
+            if self.selected_game is not None
+            else selected_ids[0]
+        )
+
+        for game in games:
+            if rating is None:
+                clear_game_rating(game.app_id)
+            else:
+                set_game_rating(game.app_id, rating)
+
+        self.refresh_ratings()
+        self.apply_filters()
+        self._restore_visible_selection(selected_ids, preferred_app_id)
+        self.data_changed.emit()
 
     def _show_table_context_menu(self, position):
         index = self.table.indexAt(position)
@@ -1213,15 +1359,45 @@ class LibraryTab(QWidget):
             selected_games = [game]
 
         menu = QMenu(self)
+        launch_action = menu.addAction("Launch in Steam")
         open_action = menu.addAction("Open Steam Page")
         open_hltb_action = menu.addAction("Open HLTB Page")
         open_hltb_action.setEnabled(bool(getattr(game, "hltb_web_link", None)))
+
+        copy_menu = menu.addMenu("Copy")
+        copy_name_action = copy_menu.addAction("Game Name")
+        copy_app_id_action = copy_menu.addAction("Steam AppID")
+        copy_steam_url_action = copy_menu.addAction("Steam URL")
+        copy_hltb_url_action = copy_menu.addAction("HLTB URL")
+        copy_hltb_url_action.setEnabled(bool(getattr(game, "hltb_web_link", None)))
+
         set_hltb_match_action = menu.addAction("Set HLTB Match...")
         set_hltb_match_action.setEnabled(
             not self._global_update_busy
             and not self._selected_refresh_busy
             and not self._manual_hltb_busy
         )
+
+        menu.addSeparator()
+
+        status_menu = menu.addMenu(f"Set Status for Selected ({len(selected_games)})")
+        status_actions = {
+            status_menu.addAction("Automatic"): "Automatic",
+            status_menu.addAction("Completed"): "Completed",
+            status_menu.addAction("On Hold"): "On Hold",
+            status_menu.addAction("Dropped"): "Dropped",
+        }
+
+        rating_menu = menu.addMenu(f"Set Rating for Selected ({len(selected_games)})")
+        rating_actions = {
+            rating_menu.addAction("Unrated"): None,
+            rating_menu.addAction("★"): 1,
+            rating_menu.addAction("★★"): 2,
+            rating_menu.addAction("★★★"): 3,
+            rating_menu.addAction("★★★★"): 4,
+            rating_menu.addAction("★★★★★"): 5,
+        }
+
         menu.addSeparator()
 
         refresh_menu = menu.addMenu(f"Refresh Selected ({len(selected_games)})")
@@ -1253,12 +1429,32 @@ class LibraryTab(QWidget):
 
         action = menu.exec(self.table.viewport().mapToGlobal(position))
 
-        if action == open_action:
+        if action == launch_action:
+            self._launch_game_in_steam(game)
+        elif action == open_action:
             self._open_game_steam_page(game)
         elif action == open_hltb_action:
             self._open_game_hltb_page(game)
+        elif action == copy_name_action:
+            self._copy_text(game.name)
+        elif action == copy_app_id_action:
+            self._copy_text(game.app_id)
+        elif action == copy_steam_url_action:
+            self._copy_text(f"https://store.steampowered.com/app/{game.app_id}/")
+        elif action == copy_hltb_url_action:
+            self._copy_text(getattr(game, "hltb_web_link", "") or "")
         elif action == set_hltb_match_action:
             self._set_hltb_match_for_game(game)
+        elif action in status_actions:
+            self._set_manual_status_for_games(
+                selected_games,
+                status_actions[action],
+            )
+        elif action in rating_actions:
+            self._set_rating_for_games(
+                selected_games,
+                rating_actions[action],
+            )
         elif action == refresh_hltb_action:
             self._refresh_selected_games("hltb", selected_games)
         elif action == refresh_metadata_action:
@@ -2647,6 +2843,7 @@ class LibraryTab(QWidget):
         self._update_game_details_text(game)
         self._request_short_description(game)
 
+        self.launch_game_button.setEnabled(True)
         self.steam_page_button.setEnabled(True)
         self.hltb_page_button.setEnabled(bool(getattr(game, "hltb_web_link", None)))
         self.set_hltb_match_button.setEnabled(True)
@@ -3154,6 +3351,7 @@ class LibraryTab(QWidget):
         self.rating_combo.setEnabled(False)
         self.rating_combo.blockSignals(False)
 
+        self.launch_game_button.setEnabled(False)
         self.steam_page_button.setEnabled(False)
         self.hltb_page_button.setEnabled(False)
         self.set_hltb_match_button.setEnabled(False)
@@ -3162,6 +3360,12 @@ class LibraryTab(QWidget):
         self._update_selected_refresh_enabled()
 
         self.current_game_pixmap = None
+
+    def launch_selected_game(self):
+        if self.selected_game is None:
+            return
+
+        self._launch_game_in_steam(self.selected_game)
 
     def open_selected_steam_page(self):
         if self.selected_game is None:
@@ -3393,6 +3597,7 @@ class LibraryTab(QWidget):
             self.refresh_hltb_button,
             self.refresh_metadata_button,
             self.refresh_achievements_button,
+            self.launch_game_button,
             self.steam_page_button,
         ):
             font = control.font()
@@ -3534,36 +3739,53 @@ class LibraryTab(QWidget):
             )
 
         if column == 6:
+            numeric_games = []
+            no_achievement_games = []
+            unknown_games = []
 
-            def achievement_key(game):
-                percentage = game.achievement_percent()
+            for game in games:
+                total = game.achievement_total
+                unlocked = game.achievements_unlocked
 
-                if percentage is None:
-                    if reverse:
-                        return float("-inf")
+                if total is None or unlocked is None:
+                    unknown_games.append(game)
+                elif total == 0:
+                    no_achievement_games.append(game)
+                else:
+                    numeric_games.append(game)
 
-                    return float("inf")
-
-                return percentage
-
-            return sorted(
-                games,
-                key=achievement_key,
+            numeric_games = sorted(
+                numeric_games,
+                key=lambda game: (
+                    game.achievement_percent() or 0,
+                    game.name.lower(),
+                ),
                 reverse=reverse,
             )
+            no_achievement_games = sorted(
+                no_achievement_games,
+                key=lambda game: game.name.lower(),
+            )
+            unknown_games = sorted(
+                unknown_games,
+                key=lambda game: game.name.lower(),
+            )
+
+            return numeric_games + no_achievement_games + unknown_games
 
         if column == 7:
             type_order = {
                 "Game": 0,
-                "Test / Beta": 1,
-                "Unknown (Test / Beta)": 2,
-                "Unknown (Game)": 3,
-                "Unknown": 4,
-                "Software": 5,
-                "Unknown (Software)": 6,
-                "DLC": 7,
-                "Video": 8,
-                "Hardware": 9,
+                "Bonus Content": 1,
+                "Test / Beta": 2,
+                "Unknown (Test / Beta)": 3,
+                "Unknown (Game)": 4,
+                "Unknown": 5,
+                "Software": 6,
+                "Unknown (Software)": 7,
+                "DLC": 8,
+                "Video": 9,
+                "Hardware": 10,
             }
 
             return sorted(
