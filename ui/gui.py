@@ -1,11 +1,17 @@
+import platform
+import sqlite3
 import sys
+from datetime import datetime
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+import PySide6
+from PySide6.QtCore import Qt, QTimer, QUrl, qVersion
 from PySide6.QtGui import QDesktopServices, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -25,11 +31,21 @@ from api.steam_api import (
 )
 from storage.credentials import delete_steam_api_key, set_steam_api_key
 from storage.database import (
+    create_database_backup,
     delete_database,
     get_database_steam_id,
+    inspect_database_file,
+    restore_database_backup,
     set_database_steam_id,
 )
 from storage.image_cache import clear_image_cache
+from storage.paths import (
+    APP_DATA_DIRECTORY,
+    BACKUP_DIRECTORY,
+    DB_FILE,
+    IMAGE_CACHE,
+    SETTINGS_FILE,
+)
 from storage.settings import (
     get_active_main_tab,
     get_appearance,
@@ -92,6 +108,7 @@ class MainWindow(QMainWindow):
         self.system_palette = system_palette
         self.appearance = get_appearance()
         self.close_after_updates_stop = False
+        self._library_database_busy = False
         self.update_controller = UpdateController(
             self.games,
             self.steam_api_key,
@@ -277,6 +294,9 @@ class MainWindow(QMainWindow):
     def _bind_tabs(self):
         self.tabs.currentChanged.connect(self._main_tab_changed)
         self.library_tab.data_changed.connect(self._library_data_changed)
+        self.library_tab.database_busy_changed.connect(
+            self._library_database_busy_changed
+        )
         self.recommendations_tab.build_busy_changed.connect(
             self._recommendation_busy_changed
         )
@@ -328,6 +348,18 @@ class MainWindow(QMainWindow):
         self.recommendations_tab.help_faq_button.clicked.connect(self.show_help_faq)
         self.maintenance_tab.help_faq_button.clicked.connect(self.show_help_faq)
 
+        self.maintenance_tab.open_data_folder_button.clicked.connect(
+            self.open_data_folder
+        )
+        self.maintenance_tab.backup_database_button.clicked.connect(
+            self.backup_database
+        )
+        self.maintenance_tab.restore_database_button.clicked.connect(
+            self.restore_database
+        )
+        self.maintenance_tab.copy_diagnostics_button.clicked.connect(
+            self.copy_diagnostic_info
+        )
         self.maintenance_tab.clear_images_button.clicked.connect(
             self.clear_cached_images
         )
@@ -380,6 +412,22 @@ class MainWindow(QMainWindow):
 
     def _recommendation_busy_changed(self, busy):
         self.maintenance_tab.set_busy(busy or self.update_controller.is_running())
+
+    def _library_database_busy_changed(self, busy):
+        self._library_database_busy = bool(busy)
+        self.maintenance_tab.set_database_operation_busy(busy)
+
+    def _database_tools_available(self):
+        if not self._library_database_busy:
+            return True
+
+        QMessageBox.information(
+            self,
+            "Database Operation Unavailable",
+            "Finish the selected-game refresh or manual HLTB operation before "
+            "backing up, restoring, or resetting the local database.",
+        )
+        return False
 
     def _games_changed(self, games):
         self.games = games
@@ -938,33 +986,294 @@ class MainWindow(QMainWindow):
 
         self.recommendations_tab.refresh_theme()
 
+    @staticmethod
+    def _format_file_size(size_bytes):
+        if size_bytes is None:
+            return "Unknown"
+
+        size = float(size_bytes)
+        units = ("B", "KiB", "MiB", "GiB")
+
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+            size /= 1024
+
+        return f"{size_bytes} B"
+
+    def open_data_folder(self):
+        APP_DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(APP_DATA_DIRECTORY)))
+
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "Open Data Folder",
+                f"Could not open the application-data folder:\n\n{APP_DATA_DIRECTORY}",
+            )
+
+    def backup_database(self):
+        if not self._database_tools_available():
+            return
+
+        if not DB_FILE.exists():
+            QMessageBox.information(
+                self,
+                "Database Backup",
+                "There is no local database to back up yet.",
+            )
+            return
+
+        BACKUP_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        default_path = BACKUP_DIRECTORY / f"steam_backlog_backup_{timestamp}.db"
+        selected_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Back Up Local Database",
+            str(default_path),
+            "SQLite Database (*.db);;All Files (*)",
+        )
+
+        if not selected_path:
+            return
+
+        destination = Path(selected_path)
+
+        if not destination.suffix:
+            destination = destination.with_suffix(".db")
+
+        try:
+            backup_path = create_database_backup(destination)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            QMessageBox.warning(
+                self,
+                "Database Backup Failed",
+                f"SteamLibraryData could not create the backup:\n\n{error}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Database Backup Complete",
+            f"A validated database backup was created at:\n\n{backup_path}",
+        )
+
+    def restore_database(self):
+        if not self._database_tools_available():
+            return
+
+        start_directory = (
+            BACKUP_DIRECTORY if BACKUP_DIRECTORY.exists() else APP_DATA_DIRECTORY
+        )
+        selected_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Restore Local Database",
+            str(start_directory),
+            "SQLite Database (*.db);;All Files (*)",
+        )
+
+        if not selected_path:
+            return
+
+        try:
+            backup_info = inspect_database_file(selected_path)
+        except (OSError, ValueError) as error:
+            QMessageBox.warning(
+                self,
+                "Invalid Database Backup",
+                str(error),
+            )
+            return
+
+        backup_steam_id = backup_info.get("steam_id")
+
+        if self.steam_id is not None and str(backup_steam_id or "") != str(
+            self.steam_id
+        ):
+            QMessageBox.warning(
+                self,
+                "Steam Account Mismatch",
+                "This backup does not belong to the currently configured Steam account. "
+                "SteamLibraryData will not restore it over this account.",
+            )
+            return
+
+        result = QMessageBox.question(
+            self,
+            "Restore Local Database",
+            f"Restore this database backup?\n\n"
+            f"{selected_path}\n\n"
+            f"Games in backup: {backup_info.get('game_count', 0):,}\n\n"
+            "The current local database will be replaced. SteamLibraryData will first "
+            "create a safety backup of the current database, then close after the restore. "
+            "Application settings, cached images, and the stored Steam Web API key are not restored.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if result != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            safety_backup = restore_database_backup(
+                selected_path,
+                expected_steam_id=self.steam_id,
+            )
+        except (OSError, sqlite3.Error, ValueError) as error:
+            QMessageBox.warning(
+                self,
+                "Database Restore Failed",
+                f"The current database was not replaced.\n\n{error}",
+            )
+            return
+
+        safety_text = (
+            f"\n\nSafety backup of the previous database:\n{safety_backup}"
+            if safety_backup is not None
+            else ""
+        )
+        QMessageBox.information(
+            self,
+            "Database Restored",
+            "The local database was restored successfully. "
+            "SteamLibraryData will now close; reopen it to load the restored data."
+            + safety_text,
+        )
+        QApplication.quit()
+
+    def _diagnostic_text(self):
+        database_exists = DB_FILE.exists()
+        database_integrity = "Not available"
+        database_games = "Unknown"
+        database_size = (
+            self._format_file_size(DB_FILE.stat().st_size) if database_exists else "0 B"
+        )
+        database_account_match = "Unknown"
+
+        if database_exists:
+            try:
+                database_info = inspect_database_file(DB_FILE)
+                database_integrity = "OK"
+                database_games = f"{database_info.get('game_count', 0):,}"
+                database_steam_id = database_info.get("steam_id")
+
+                if self.steam_id is None or database_steam_id is None:
+                    database_account_match = "Unknown"
+                else:
+                    database_account_match = (
+                        "Yes" if str(database_steam_id) == str(self.steam_id) else "No"
+                    )
+            except (OSError, ValueError) as error:
+                database_integrity = f"Check failed: {error}"
+
+        lines = [
+            "SteamLibraryData diagnostics",
+            f"Generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+            "",
+            f"Platform: {platform.platform()}",
+            f"Python: {platform.python_version()}",
+            f"PySide6: {PySide6.__version__}",
+            f"Qt: {qVersion()}",
+            "",
+            f"Loaded library games: {len(self.games):,}",
+            f"SteamID configured: {'Yes' if self.steam_id else 'No'}",
+            f"Steam Web API key configured: {'Yes' if self.steam_api_key else 'No'}",
+            f"Database exists: {'Yes' if database_exists else 'No'}",
+            f"Database size: {database_size}",
+            f"Database integrity: {database_integrity}",
+            f"Database game rows: {database_games}",
+            f"Database account matches configured account: {database_account_match}",
+            "",
+            f"Startup library refresh: {'On' if self.maintenance_tab.startup_refresh_library_checkbox.isChecked() else 'Off'}",
+            f"Startup missing-data update: {'On' if self.maintenance_tab.startup_update_missing_data_checkbox.isChecked() else 'Off'}",
+            "",
+            f"Application data: {APP_DATA_DIRECTORY}",
+            f"Database: {DB_FILE}",
+            f"Settings: {SETTINGS_FILE}",
+            f"Image cache: {IMAGE_CACHE}",
+            f"Backups: {BACKUP_DIRECTORY}",
+            "",
+            "The Steam Web API key value is intentionally not included.",
+        ]
+        return "\n".join(lines)
+
+    def copy_diagnostic_info(self):
+        app = QApplication.instance()
+
+        if app is None:
+            return
+
+        diagnostic_text = self._diagnostic_text()
+        app.clipboard().setText(diagnostic_text)
+        QMessageBox.information(
+            self,
+            "Diagnostic Info",
+            "Diagnostic information was copied to the clipboard. "
+            "The Steam Web API key itself is not included.",
+        )
+
     def clear_cached_images(self):
         clear_image_cache()
 
         QMessageBox.information(
             self,
             "Image Cache",
-            "Cached game images have been deleted.",
+            "Cached game images have been deleted. They will be downloaded again as needed.",
         )
 
     def reset_database(self):
+        if not self._database_tools_available():
+            return
+
         result = QMessageBox.question(
             self,
             "Reset Local Database",
-            "Delete all locally collected Steam, HLTB, SteamSpy, "
-            "achievement, and cached image data?",
+            "Reset all locally collected library data?\n\n"
+            "This deletes local Steam library/enrichment data, manual statuses, ratings, "
+            "saved recommendations, and cached images. Your application settings, "
+            "SteamID64 setting, and stored Steam Web API key are kept.\n\n"
+            "Before deletion, SteamLibraryData will create a safety backup of the current "
+            "database in the application backups folder.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
 
         if result != QMessageBox.StandardButton.Yes:
             return
 
-        clear_image_cache()
-        delete_database()
+        safety_backup = None
 
+        if DB_FILE.exists():
+            try:
+                safety_backup = create_database_backup(prefix="pre_reset")
+            except (OSError, sqlite3.Error, ValueError) as error:
+                QMessageBox.warning(
+                    self,
+                    "Database Reset Cancelled",
+                    "The safety backup could not be created, so the database was not reset."
+                    f"\n\n{error}",
+                )
+                return
+
+        try:
+            clear_image_cache()
+            delete_database()
+        except OSError as error:
+            QMessageBox.warning(
+                self,
+                "Database Reset Failed",
+                f"Local data could not be fully deleted:\n\n{error}",
+            )
+            return
+
+        backup_text = (
+            f"\n\nSafety backup:\n{safety_backup}" if safety_backup is not None else ""
+        )
         QMessageBox.information(
             self,
             "Database Reset",
-            "Local data has been deleted. The application will now close.",
+            "Local database and cached image data have been deleted. "
+            "SteamLibraryData will now close." + backup_text,
         )
 
         QApplication.quit()

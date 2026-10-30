@@ -312,6 +312,7 @@ class LibraryTableView(QTableView):
 
 class LibraryTab(QWidget):
     data_changed = Signal()
+    database_busy_changed = Signal(bool)
 
     def __init__(self, games, parent=None):
         super().__init__(parent)
@@ -329,6 +330,7 @@ class LibraryTab(QWidget):
         self._global_update_busy = False
         self._manual_hltb_busy = False
         self._manual_hltb_worker = None
+        self._database_busy_state = False
         self.description_requests_in_flight = set()
         self._adjusting_columns = False
         self._preferred_column_widths = list(DEFAULT_LIBRARY_COLUMN_WIDTHS)
@@ -3202,6 +3204,16 @@ class LibraryTab(QWidget):
     def _selected_refresh_busy_changed(self, busy):
         self._selected_refresh_busy = busy
         self._update_selected_refresh_enabled()
+        self._update_database_busy_state()
+
+    def _update_database_busy_state(self):
+        busy = self._selected_refresh_busy or self._manual_hltb_busy
+
+        if busy == self._database_busy_state:
+            return
+
+        self._database_busy_state = busy
+        self.database_busy_changed.emit(busy)
 
     def _global_update_busy_changed(self, busy):
         self._global_update_busy = busy
@@ -3435,6 +3447,7 @@ class LibraryTab(QWidget):
 
         self._manual_hltb_busy = True
         self._update_selected_refresh_enabled()
+        self._update_database_busy_state()
 
         if self.selected_game is not None and self.selected_game.app_id == game.app_id:
             self._set_selected_refresh_status(
@@ -3496,6 +3509,7 @@ class LibraryTab(QWidget):
                 and self.selected_game.app_id == game.app_id
             ):
                 self._set_selected_refresh_status("Manual HLTB match cancelled.")
+            self._finish_manual_hltb_operation()
             return
 
         try:
@@ -3506,6 +3520,7 @@ class LibraryTab(QWidget):
                 "Could Not Save HLTB Match",
                 f"The HLTB match could not be saved:\n\n{error}",
             )
+            self._finish_manual_hltb_operation()
             return
 
         self.refresh_data()
@@ -3518,6 +3533,7 @@ class LibraryTab(QWidget):
             )
 
         self.data_changed.emit()
+        self._finish_manual_hltb_operation()
 
     def _manual_hltb_lookup_failed(self, game, error_message):
         if self.selected_game is not None and self.selected_game.app_id == game.app_id:
@@ -3531,11 +3547,18 @@ class LibraryTab(QWidget):
             "Could Not Load HLTB Match",
             f"Could not load that HowLongToBeat entry:\n\n{error_message}",
         )
+        self._finish_manual_hltb_operation()
+
+    def _finish_manual_hltb_operation(self):
+        if not self._manual_hltb_busy:
+            return
+
+        self._manual_hltb_busy = False
+        self._update_selected_refresh_enabled()
+        self._update_database_busy_state()
 
     def _manual_hltb_lookup_finished(self):
         self._manual_hltb_worker = None
-        self._manual_hltb_busy = False
-        self._update_selected_refresh_enabled()
 
     def update_media_sizes(self):
         if not hasattr(self, "details_content"):

@@ -1,10 +1,11 @@
+import os
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from game import Game
-from storage.paths import DB_FILE
+from storage.paths import BACKUP_DIRECTORY, DB_FILE
 
 
 @contextmanager
@@ -606,36 +607,34 @@ def load_games():
             FROM games
         """).fetchall()
 
+        genres_by_app_id = {}
+
+        for app_id, genre_name in connection.execute(
+            """
+            SELECT game_genres.app_id, genres.name
+            FROM game_genres
+            JOIN genres ON genres.genre_id = game_genres.genre_id
+            """
+        ).fetchall():
+            genres_by_app_id.setdefault(app_id, []).append(genre_name)
+
+        tags_by_app_id = {}
+
+        for app_id, tag_name, weight in connection.execute(
+            """
+            SELECT game_tags.app_id, tags.name, game_tags.weight
+            FROM game_tags
+            JOIN tags ON tags.tag_id = game_tags.tag_id
+            """
+        ).fetchall():
+            tags_by_app_id.setdefault(app_id, {})[tag_name] = weight
+
         games = []
 
         for row in rows:
             app_id = row[0]
-
-            genre_rows = connection.execute(
-                """
-                SELECT genres.name
-                FROM genres
-                JOIN game_genres ON genres.genre_id = game_genres.genre_id
-                WHERE game_genres.app_id = ?
-            """,
-                (app_id,),
-            ).fetchall()
-
-            tag_rows = connection.execute(
-                """
-                SELECT tags.name, game_tags.weight
-                FROM tags
-                JOIN game_tags ON tags.tag_id = game_tags.tag_id
-                WHERE game_tags.app_id = ?
-            """,
-                (app_id,),
-            ).fetchall()
-
-            genres = [genre[0] for genre in genre_rows]
-            tags = {tag[0]: tag[1] for tag in tag_rows}
-
             game = Game(
-                app_id=row[0],
+                app_id=app_id,
                 name=row[1],
                 playtime_minutes=row[2],
                 playtime_2weeks_minutes=row[3],
@@ -660,14 +659,13 @@ def load_games():
                 achievements_checked=bool(row[22]),
                 achievements_updated_at=row[23],
                 achievements_playtime_minutes=row[24],
-                genres=genres,
-                tags=tags,
+                genres=genres_by_app_id.get(app_id, []),
+                tags=tags_by_app_id.get(app_id, {}),
                 manual_status=row[25],
                 metadata_updated_at=row[26],
                 hltb_updated_at=row[27],
                 steam_short_description=row[28],
             )
-
             games.append(game)
 
         return games
@@ -702,13 +700,213 @@ def set_database_steam_id(steam_id):
         )
 
 
-def delete_database():
-    files = [
-        DB_FILE,
-        Path(f"{DB_FILE}-journal"),
-        Path(f"{DB_FILE}-wal"),
-        Path(f"{DB_FILE}-shm"),
+def _database_sidecar_files(database_path):
+    database_path = Path(database_path)
+    return [
+        Path(f"{database_path}-journal"),
+        Path(f"{database_path}-wal"),
+        Path(f"{database_path}-shm"),
     ]
+
+
+def inspect_database_file(database_path):
+    database_path = Path(database_path)
+
+    if not database_path.exists() or not database_path.is_file():
+        raise ValueError("The selected database file does not exist.")
+
+    try:
+        uri = database_path.resolve().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+    except (OSError, sqlite3.Error) as error:
+        raise ValueError(f"Could not open the selected database: {error}") from error
+
+    try:
+        connection.execute("PRAGMA busy_timeout = 3000")
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()
+
+        if quick_check is None or quick_check[0] != "ok":
+            detail = quick_check[0] if quick_check else "unknown integrity error"
+            raise ValueError(f"SQLite integrity check failed: {detail}")
+
+        table_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        required_tables = {"database_info", "games"}
+        missing_tables = required_tables - table_names
+
+        if missing_tables:
+            missing = ", ".join(sorted(missing_tables))
+            raise ValueError(
+                "The selected file is a SQLite database, but it does not look like "
+                f"a SteamLibraryData database. Missing: {missing}."
+            )
+
+        required_database_info_columns = {"id", "steam_id"}
+        database_info_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(database_info)").fetchall()
+        }
+        missing_database_info_columns = (
+            required_database_info_columns - database_info_columns
+        )
+
+        if missing_database_info_columns:
+            missing = ", ".join(sorted(missing_database_info_columns))
+            raise ValueError(
+                "The selected database is missing required database-info fields: "
+                f"{missing}."
+            )
+
+        required_game_columns = {
+            "app_id",
+            "name",
+            "playtime_minutes",
+            "metadata_checked",
+            "hltb_main",
+            "hltb_main_extra",
+            "hltb_completionist",
+            "hltb_all_styles",
+            "hltb_match_name",
+            "hltb_similarity",
+            "hltb_checked",
+            "achievement_total",
+            "achievements_unlocked",
+            "achievements_checked",
+        }
+        game_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(games)").fetchall()
+        }
+        missing_game_columns = required_game_columns - game_columns
+
+        if missing_game_columns:
+            missing = ", ".join(sorted(missing_game_columns))
+            raise ValueError(
+                "The selected database has an incomplete games schema and cannot be "
+                f"safely restored. Missing: {missing}."
+            )
+
+        steam_id_row = connection.execute(
+            "SELECT steam_id FROM database_info WHERE id = 1"
+        ).fetchone()
+        game_count = connection.execute("SELECT COUNT(*) FROM games").fetchone()[0]
+
+        return {
+            "path": database_path,
+            "steam_id": steam_id_row[0] if steam_id_row is not None else None,
+            "game_count": game_count,
+            "integrity": "ok",
+            "size_bytes": database_path.stat().st_size,
+        }
+    except sqlite3.Error as error:
+        raise ValueError(
+            f"Could not validate the selected database: {error}"
+        ) from error
+    finally:
+        connection.close()
+
+
+def _default_backup_path(prefix="steam_backlog_backup"):
+    BACKUP_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    suffix = f"{time.time_ns() % 1_000_000_000:09d}"
+    candidate = BACKUP_DIRECTORY / f"{prefix}_{timestamp}-{suffix}.db"
+    counter = 2
+
+    while candidate.exists():
+        candidate = BACKUP_DIRECTORY / f"{prefix}_{timestamp}-{suffix}-{counter}.db"
+        counter += 1
+
+    return candidate
+
+
+def create_database_backup(destination=None, prefix="steam_backlog_backup"):
+    if not DB_FILE.exists():
+        raise FileNotFoundError("There is no local database to back up.")
+
+    destination = (
+        Path(destination) if destination is not None else _default_backup_path(prefix)
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    if destination.resolve() == DB_FILE.resolve():
+        raise ValueError("A backup cannot overwrite the active database.")
+
+    temporary = destination.with_name(f".{destination.name}.{time.time_ns()}.tmp")
+
+    try:
+        with (
+            closing(sqlite3.connect(DB_FILE)) as source,
+            closing(sqlite3.connect(temporary)) as target,
+        ):
+            source.execute("PRAGMA busy_timeout = 30000")
+            source.backup(target)
+            target.commit()
+
+        inspect_database_file(temporary)
+        os.replace(temporary, destination)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+    return destination
+
+
+def restore_database_backup(source_path, expected_steam_id=None):
+    source_path = Path(source_path)
+    source_info = inspect_database_file(source_path)
+    backup_steam_id = source_info["steam_id"]
+
+    if expected_steam_id is not None:
+        if backup_steam_id is None:
+            raise ValueError(
+                "The selected backup does not identify a Steam account, so it cannot "
+                "be restored over the currently configured account."
+            )
+
+        if str(backup_steam_id) != str(expected_steam_id):
+            raise ValueError(
+                "The selected backup belongs to a different Steam account."
+            )
+
+    safety_backup = None
+
+    if DB_FILE.exists():
+        safety_backup = create_database_backup(prefix="pre_restore")
+
+    DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = DB_FILE.with_name(f".{DB_FILE.name}.{time.time_ns()}.restore.tmp")
+
+    try:
+        with (
+            closing(sqlite3.connect(source_path)) as source,
+            closing(sqlite3.connect(temporary)) as target,
+        ):
+            source.execute("PRAGMA busy_timeout = 30000")
+            source.backup(target)
+            target.commit()
+
+        inspect_database_file(temporary)
+
+        for sidecar in _database_sidecar_files(DB_FILE):
+            if sidecar.exists():
+                sidecar.unlink()
+
+        os.replace(temporary, DB_FILE)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+    return safety_backup
+
+
+def delete_database():
+    files = [DB_FILE, *_database_sidecar_files(DB_FILE)]
 
     for file in files:
         if file.exists():

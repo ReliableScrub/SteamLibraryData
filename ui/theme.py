@@ -170,6 +170,14 @@ QPushButton[role="danger"]:hover {
     border-color: @DANGER@;
 }
 
+QPushButton[role="primary"]:disabled,
+QPushButton[role="warning"]:disabled,
+QPushButton[role="danger"]:disabled {
+    color: @DISABLED_TEXT@;
+    background-color: @DISABLED_BG@;
+    border-color: @BORDER@;
+}
+
 QLineEdit,
 QComboBox,
 QSpinBox,

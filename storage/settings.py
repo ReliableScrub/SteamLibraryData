@@ -1,9 +1,24 @@
 import json
+import os
+import time
 
 from storage.paths import SETTINGS_FILE
 
 VALID_APPEARANCES = {"System", "Light", "Dark"}
 VALID_MAIN_TABS = {"Library", "Recommendations", "Maintenance", "Contact"}
+
+
+def _preserve_invalid_settings_file():
+    if not SETTINGS_FILE.exists():
+        return None
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    suffix = f"{time.time_ns() % 1_000_000_000:09d}"
+    preserved = SETTINGS_FILE.with_name(
+        f"{SETTINGS_FILE.stem}.invalid-{timestamp}-{suffix}{SETTINGS_FILE.suffix}"
+    )
+    os.replace(SETTINGS_FILE, preserved)
+    return preserved
 
 
 def load_settings():
@@ -13,20 +28,37 @@ def load_settings():
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError:
+        _preserve_invalid_settings_file()
         return {}
+    except OSError:
+        raise
 
     if not isinstance(data, dict):
+        _preserve_invalid_settings_file()
         return {}
 
     return data
 
 
 def save_settings(settings):
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not isinstance(settings, dict):
+        raise ValueError("Settings must be saved as a dictionary.")
 
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
-        json.dump(settings, file, indent=4)
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SETTINGS_FILE.with_name(f".{SETTINGS_FILE.name}.{time.time_ns()}.tmp")
+
+    try:
+        with open(temporary, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=4)
+            file.flush()
+            os.fsync(file.fileno())
+
+        os.replace(temporary, SETTINGS_FILE)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        raise
 
 
 def get_steam_id():

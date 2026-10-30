@@ -62,6 +62,7 @@ class MaintenanceTab(QWidget):
 
         self._review_available = False
         self._busy = False
+        self._database_operation_busy = False
 
         self._create_update_controls()
         self._create_settings_controls(
@@ -225,7 +226,30 @@ class MaintenanceTab(QWidget):
             "Open setup help and answers for common SteamLibraryData issues."
         )
 
+        self.open_data_folder_button = QPushButton("Open Data Folder")
+        self.open_data_folder_button.setToolTip(
+            "Open the SteamLibraryData application-data folder in the system file manager."
+        )
+
+        self.backup_database_button = QPushButton("Back Up Database...")
+        self.backup_database_button.setToolTip(
+            "Save a validated SQLite backup of the current local database."
+        )
+
+        self.restore_database_button = QPushButton("Restore Database...")
+        self.restore_database_button.setToolTip(
+            "Replace the current local database with a validated SteamLibraryData backup."
+        )
+
+        self.copy_diagnostics_button = QPushButton("Copy Diagnostic Info")
+        self.copy_diagnostics_button.setToolTip(
+            "Copy non-secret application, platform, and local-data information for troubleshooting."
+        )
+
         self.clear_images_button = QPushButton("Clear Image Cache")
+        self.clear_images_button.setToolTip(
+            "Delete cached game images. Images will be downloaded again as needed."
+        )
 
         self.reset_database_button = QPushButton("Reset Local Database")
 
@@ -354,8 +378,36 @@ class MaintenanceTab(QWidget):
         application_layout.addWidget(QLabel("<b>Startup Updates</b>"))
         application_layout.addWidget(self.startup_refresh_library_checkbox)
         application_layout.addWidget(self.startup_update_missing_data_checkbox)
-        application_layout.addWidget(self.clear_images_button)
         layout.addWidget(application_card)
+
+        local_data_card = QFrame()
+        local_data_card.setProperty("card", True)
+        local_data_layout = QVBoxLayout(local_data_card)
+        local_data_layout.setContentsMargins(18, 16, 18, 18)
+        local_data_layout.setSpacing(10)
+
+        local_data_layout.addWidget(QLabel("<h2>Local Data & Diagnostics</h2>"))
+        local_data_description = QLabel(
+            "Back up or restore the local database, open the application-data folder, "
+            "or copy troubleshooting information. Database backups include library "
+            "enrichment, statuses, ratings, and saved recommendations."
+        )
+        local_data_description.setWordWrap(True)
+        local_data_layout.addWidget(local_data_description)
+
+        database_row = QHBoxLayout()
+        database_row.addWidget(self.backup_database_button)
+        database_row.addWidget(self.restore_database_button)
+        database_row.addStretch()
+        local_data_layout.addLayout(database_row)
+
+        support_row = QHBoxLayout()
+        support_row.addWidget(self.open_data_folder_button)
+        support_row.addWidget(self.copy_diagnostics_button)
+        support_row.addWidget(self.clear_images_button)
+        support_row.addStretch()
+        local_data_layout.addLayout(support_row)
+        layout.addWidget(local_data_card)
 
         danger_card = QFrame()
         danger_card.setProperty("card", True)
@@ -367,10 +419,10 @@ class MaintenanceTab(QWidget):
         danger_layout.addWidget(QLabel("<h2>Danger Zone</h2>"))
 
         danger_description = QLabel(
-            "Resetting the local database deletes "
-            "collected Steam, HLTB, SteamSpy, "
-            "achievement, rating, and recommendation "
-            "data stored by the application."
+            "Resetting the local database deletes collected Steam, HLTB, SteamSpy, "
+            "achievement, status, rating, recommendation, and cached image data. "
+            "SteamLibraryData creates a safety backup of the database before reset. "
+            "Application settings and the stored Steam Web API key are not removed."
         )
         danger_description.setWordWrap(True)
 
@@ -635,4 +687,15 @@ class MaintenanceTab(QWidget):
         self.change_api_key_button.setEnabled(enabled)
         self.remove_api_key_button.setEnabled(enabled and self._api_key_configured)
 
+        self.clear_images_button.setEnabled(enabled)
+        self._update_database_operation_controls()
+
+    def set_database_operation_busy(self, busy):
+        self._database_operation_busy = bool(busy)
+        self._update_database_operation_controls()
+
+    def _update_database_operation_controls(self):
+        enabled = not self._busy and not self._database_operation_busy
+        self.backup_database_button.setEnabled(enabled)
+        self.restore_database_button.setEnabled(enabled)
         self.reset_database_button.setEnabled(enabled)
