@@ -116,6 +116,10 @@ class RecommendationsTab(QWidget):
         self.recommendation_thread = None
         self.recommendation_worker = None
         self._update_busy = False
+        self._inputs_dirty = False
+        self._dirty_during_build = False
+        self._automatic_build = False
+        self._auto_build_blocked = False
 
         self._create_controls()
         self._create_layout()
@@ -784,6 +788,40 @@ class RecommendationsTab(QWidget):
 
         self.refresh()
 
+    def notify_inputs_changed(self):
+        self._inputs_dirty = True
+        self._auto_build_blocked = False
+
+        if self.recommendation_build_running():
+            self._dirty_during_build = True
+
+        self.refresh()
+
+        if self.isVisible() and not self._update_busy:
+            QTimer.singleShot(0, self._maybe_auto_rebuild)
+
+    def on_tab_activated(self):
+        self.refresh()
+        QTimer.singleShot(0, self._maybe_auto_rebuild)
+
+    def _maybe_auto_rebuild(self):
+        if self._auto_build_blocked:
+            return
+
+        if self._update_busy or self.recommendation_build_running():
+            return
+
+        if not self.isVisible():
+            return
+
+        if self.recommendation_state is not None and not self._inputs_dirty:
+            return
+
+        if not self.games:
+            return
+
+        self._start_recommendation_build(automatic=True)
+
     def refresh(self):
         self.genre_tag_filter.set_available_from_games(self.games)
 
@@ -843,6 +881,9 @@ class RecommendationsTab(QWidget):
         else:
             self.refresh()
 
+            if self.isVisible():
+                QTimer.singleShot(0, self._maybe_auto_rebuild)
+
         self._update_rebuild_controls()
 
     def _update_rebuild_controls(self):
@@ -874,9 +915,15 @@ class RecommendationsTab(QWidget):
             self.rebuild_button.setText("Rebuild Recommendations")
 
     def rebuild_recommendations(self):
+        self._auto_build_blocked = False
+        self._start_recommendation_build(automatic=False)
+
+    def _start_recommendation_build(self, automatic=False):
         if self._update_busy or self.recommendation_build_running():
             return
 
+        self._automatic_build = bool(automatic)
+        self._dirty_during_build = False
         self.saved_status_label.setText("Building personalized recommendations...")
 
         self.recommendation_thread = QThread(self)
@@ -902,26 +949,40 @@ class RecommendationsTab(QWidget):
         self._update_rebuild_controls()
 
     def _recommendations_rebuilt(self):
+        if not self._dirty_during_build:
+            self._inputs_dirty = False
+
+        self._auto_build_blocked = False
         self.refresh()
 
     def _recommendations_rebuild_failed(self, message):
+        self._inputs_dirty = True
+        self._auto_build_blocked = self._automatic_build
         self.saved_status_label.setText("Recommendation rebuild failed.")
         detail = str(message)
+        readiness_failure = "eligible backlog" in detail.casefold()
 
-        if "eligible backlog" in detail.casefold():
+        if readiness_failure:
             detail = f"{detail}\n\n{self._recommendation_readiness_message()}"
 
-        QMessageBox.warning(
-            self,
-            "Recommendations",
-            detail,
-        )
+        if not self._automatic_build or not readiness_failure:
+            QMessageBox.warning(
+                self,
+                "Recommendations",
+                detail,
+            )
 
     def _recommendation_thread_finished(self):
+        needs_followup = self._inputs_dirty and not self._auto_build_blocked
+
         self.recommendation_worker = None
         self.recommendation_thread = None
+        self._automatic_build = False
         self._update_rebuild_controls()
         self.build_busy_changed.emit(False)
+
+        if needs_followup and self.isVisible() and not self._update_busy:
+            QTimer.singleShot(0, self._maybe_auto_rebuild)
 
     def _filters_changed(self):
         self._rebuild_for_you()
@@ -1099,9 +1160,15 @@ class RecommendationsTab(QWidget):
 
         if self.recommendation_state is None:
             self.for_you_records = []
-            self.saved_status_label.setText(
-                "Recommendations have not been generated yet."
-            )
+
+            if self._inputs_dirty:
+                self.saved_status_label.setText(
+                    "Needs rebuild • saved recommendations are missing or stale."
+                )
+            else:
+                self.saved_status_label.setText(
+                    "Recommendations have not been generated yet."
+                )
             self._clear_for_you_card(
                 "Use Build Recommendations above to create a personalized "
                 "backlog shortlist from your current ratings and library data.",
@@ -1111,8 +1178,10 @@ class RecommendationsTab(QWidget):
 
         if not self.recommendation_records:
             self.for_you_records = []
+            freshness = "Needs rebuild" if self._inputs_dirty else "Up to date"
             self.saved_status_label.setText(
-                "The current recommendation build has no eligible backlog candidates."
+                f"{freshness} • the current recommendation build has no eligible "
+                "backlog candidates."
             )
             self._clear_for_you_card(
                 self._recommendation_readiness_message(),
@@ -1754,7 +1823,12 @@ class RecommendationsTab(QWidget):
         state = self.recommendation_state
 
         if state is None:
-            self.saved_status_label.setText("No saved recommendation build.")
+            if self._inputs_dirty:
+                self.saved_status_label.setText(
+                    "Needs rebuild • no saved recommendation build."
+                )
+            else:
+                self.saved_status_label.setText("No saved recommendation build.")
             return
 
         (
@@ -1768,8 +1842,10 @@ class RecommendationsTab(QWidget):
             candidate_game_count,
         ) = state
 
+        freshness = "Needs rebuild" if self._inputs_dirty else "Up to date"
+
         self.saved_status_label.setText(
-            f"{len(self.recommendation_records)} saved recommendations"
+            f"{freshness} • {len(self.recommendation_records)} saved recommendations"
             f" • {eligible_count} match filters"
             f" • showing {showing_count}"
             f" • {candidate_game_count} candidates scored"
@@ -2490,6 +2566,7 @@ class RecommendationsTab(QWidget):
         super().showEvent(event)
         QTimer.singleShot(0, self._update_media_sizes)
         QTimer.singleShot(0, self._update_responsive_typography)
+        QTimer.singleShot(0, self.on_tab_activated)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

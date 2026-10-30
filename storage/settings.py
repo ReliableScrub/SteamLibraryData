@@ -86,6 +86,49 @@ def set_appearance(appearance):
     save_settings(settings)
 
 
+def get_active_main_tab():
+    settings = load_settings()
+    tab_name = settings.get("active_main_tab", "Library")
+
+    if tab_name not in VALID_MAIN_TABS:
+        return "Library"
+
+    return tab_name
+
+
+def set_active_main_tab(tab_name):
+    if tab_name not in VALID_MAIN_TABS:
+        return
+
+    settings = load_settings()
+    settings["active_main_tab"] = tab_name
+    save_settings(settings)
+
+
+def get_startup_refresh_library():
+    settings = load_settings()
+    value = settings.get("startup_refresh_library", True)
+    return value if isinstance(value, bool) else True
+
+
+def set_startup_refresh_library(enabled):
+    settings = load_settings()
+    settings["startup_refresh_library"] = bool(enabled)
+    save_settings(settings)
+
+
+def get_startup_update_missing_data():
+    settings = load_settings()
+    value = settings.get("startup_update_missing_data", True)
+    return value if isinstance(value, bool) else True
+
+
+def set_startup_update_missing_data(enabled):
+    settings = load_settings()
+    settings["startup_update_missing_data"] = bool(enabled)
+    save_settings(settings)
+
+
 def get_window_settings():
     settings = load_settings()
     window = settings.get("window")
@@ -99,23 +142,4 @@ def get_window_settings():
 def set_window_settings(window):
     settings = load_settings()
     settings["window"] = window
-    save_settings(settings)
-
-
-def get_active_main_tab():
-    settings = load_settings()
-    active_tab = settings.get("active_main_tab", "Library")
-
-    if active_tab not in VALID_MAIN_TABS:
-        return "Library"
-
-    return active_tab
-
-
-def set_active_main_tab(active_tab):
-    if active_tab not in VALID_MAIN_TABS:
-        raise ValueError(f"Invalid main tab: {active_tab}")
-
-    settings = load_settings()
-    settings["active_main_tab"] = active_tab
     save_settings(settings)

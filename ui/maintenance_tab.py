@@ -1,6 +1,8 @@
 import re
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -9,11 +11,41 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from ui.semantic_widgets import set_dynamic_property
+
+
+class ElidedStatusLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__("", parent)
+        self._full_text = ""
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.setText(text)
+
+    def setText(self, text):
+        self._full_text = str(text)
+        self.setToolTip(self._full_text)
+        self._update_elided_text()
+
+    def _update_elided_text(self):
+        width = max(self.contentsRect().width(), 1)
+        text = self.fontMetrics().elidedText(
+            self._full_text,
+            Qt.TextElideMode.ElideRight,
+            width,
+        )
+        QLabel.setText(self, text)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided_text()
 
 
 class MaintenanceTab(QWidget):
@@ -23,6 +55,8 @@ class MaintenanceTab(QWidget):
         api_key_configured=False,
         appearance="System",
         parent=None,
+        startup_refresh_library=True,
+        startup_update_missing_data=True,
     ):
         super().__init__(parent)
 
@@ -34,11 +68,13 @@ class MaintenanceTab(QWidget):
             steam_id,
             api_key_configured,
             appearance,
+            startup_refresh_library,
+            startup_update_missing_data,
         )
         self._create_layout()
 
     def _create_update_controls(self):
-        self.update_all_status = QLabel("Missing Data")
+        self.update_all_status = ElidedStatusLabel("Missing Data")
         self.update_all_button = QPushButton("Update Missing Data")
         self.cancel_updates_button = QPushButton("Cancel Updates")
         self.cancel_updates_button.setProperty("role", "warning")
@@ -48,11 +84,18 @@ class MaintenanceTab(QWidget):
         self.view_failures_button.setVisible(False)
         self.view_failures_button.setEnabled(False)
 
+        self.retry_failures_button = QPushButton("Retry Failed")
+        self.retry_failures_button.setVisible(False)
+        self.retry_failures_button.setEnabled(False)
+        self.retry_failures_button.setToolTip(
+            "Retry failed HLTB, Genre / Tag, and achievement items from the most recent update."
+        )
+
         self.update_all_progress = QProgressBar()
         self.update_all_progress.setVisible(False)
         self.update_all_progress.setFormat("%v / %m")
 
-        self.library_status = QLabel()
+        self.library_status = ElidedStatusLabel()
         self.library_button = QPushButton("Refresh Steam Library")
 
         self.library_progress = QProgressBar()
@@ -60,7 +103,7 @@ class MaintenanceTab(QWidget):
         self.library_progress.setTextVisible(False)
         self.library_progress.setVisible(False)
 
-        self.steam_classification_status = QLabel()
+        self.steam_classification_status = ElidedStatusLabel()
         self.steam_classification_button = QPushButton("Refresh Steam Classification")
 
         self.steam_classification_progress = QProgressBar()
@@ -68,7 +111,7 @@ class MaintenanceTab(QWidget):
         self.steam_classification_progress.setTextVisible(False)
         self.steam_classification_progress.setVisible(False)
 
-        self.hltb_status = QLabel()
+        self.hltb_status = ElidedStatusLabel()
         self.hltb_refresh_count = QComboBox()
         self.hltb_refresh_count.addItems(["10", "25", "50", "100", "All"])
         self.hltb_refresh_count.setCurrentText("25")
@@ -88,7 +131,7 @@ class MaintenanceTab(QWidget):
         self.hltb_review_button.setProperty("role", "warning")
         self.hltb_review_button.setEnabled(False)
 
-        self.metadata_status = QLabel()
+        self.metadata_status = ElidedStatusLabel()
         self.metadata_refresh_count = QComboBox()
         self.metadata_refresh_count.addItems(["25", "50", "100", "250", "All"])
         self.metadata_refresh_count.setCurrentText("100")
@@ -104,7 +147,7 @@ class MaintenanceTab(QWidget):
         self.metadata_progress.setVisible(False)
         self.metadata_progress.setFormat("%v / %m")
 
-        self.achievement_status = QLabel()
+        self.achievement_status = ElidedStatusLabel()
         self.achievement_refresh_button = QPushButton("Refresh Changed")
         self.achievement_refresh_button.setToolTip(
             "Refresh achievements only for games whose Steam playtime increased "
@@ -115,11 +158,27 @@ class MaintenanceTab(QWidget):
         self.achievement_progress.setVisible(False)
         self.achievement_progress.setFormat("%v / %m")
 
+        progress_bars = (
+            self.update_all_progress,
+            self.library_progress,
+            self.steam_classification_progress,
+            self.hltb_progress,
+            self.metadata_progress,
+            self.achievement_progress,
+        )
+        progress_height = max(bar.sizeHint().height() for bar in progress_bars)
+
+        for bar in progress_bars:
+            bar.setFixedHeight(progress_height)
+            bar.setMinimumWidth(220)
+
     def _create_settings_controls(
         self,
         steam_id,
         api_key_configured,
         appearance,
+        startup_refresh_library,
+        startup_update_missing_data,
     ):
         self.account_label = QLabel()
         self.set_steam_id(steam_id)
@@ -148,6 +207,18 @@ class MaintenanceTab(QWidget):
             "Dark",
         }:
             self.appearance_combo.setCurrentText(appearance)
+
+        self.startup_refresh_library_checkbox = QCheckBox(
+            "Refresh Steam library on startup"
+        )
+        self.startup_refresh_library_checkbox.setChecked(bool(startup_refresh_library))
+
+        self.startup_update_missing_data_checkbox = QCheckBox(
+            "Update missing data on startup"
+        )
+        self.startup_update_missing_data_checkbox.setChecked(
+            bool(startup_update_missing_data)
+        )
 
         self.help_faq_button = QPushButton("Help / FAQ")
         self.help_faq_button.setToolTip(
@@ -205,6 +276,7 @@ class MaintenanceTab(QWidget):
         update_all_buttons.addWidget(self.update_all_button)
         update_all_buttons.addWidget(self.cancel_updates_button)
         update_all_buttons.addWidget(self.view_failures_button)
+        update_all_buttons.addWidget(self.retry_failures_button)
         updates_grid.addLayout(update_all_buttons, 0, 2)
 
         updates_grid.addWidget(self.library_status, 1, 0)
@@ -243,7 +315,8 @@ class MaintenanceTab(QWidget):
 
         updates_grid.setColumnStretch(0, 1)
         updates_grid.setColumnStretch(1, 1)
-        updates_grid.setColumnStretch(2, 1)
+        updates_grid.setColumnStretch(2, 0)
+        updates_grid.setColumnMinimumWidth(1, 220)
 
         updates_layout.addLayout(updates_grid)
         layout.addWidget(updates_card)
@@ -277,6 +350,10 @@ class MaintenanceTab(QWidget):
         appearance_row.addWidget(self.appearance_combo)
         appearance_row.addStretch()
         application_layout.addLayout(appearance_row)
+        application_layout.addSpacing(4)
+        application_layout.addWidget(QLabel("<b>Startup Updates</b>"))
+        application_layout.addWidget(self.startup_refresh_library_checkbox)
+        application_layout.addWidget(self.startup_update_missing_data_checkbox)
         application_layout.addWidget(self.clear_images_button)
         layout.addWidget(application_card)
 
@@ -487,9 +564,15 @@ class MaintenanceTab(QWidget):
     def set_failures(self, failures):
         count = len(failures)
         available = count > 0
+        retryable_count = sum(
+            1
+            for failure in failures
+            if failure.get("source") in {"hltb", "metadata", "achievements"}
+            and failure.get("app_id") is not None
+        )
 
         self.view_failures_button.setVisible(available)
-        self.view_failures_button.setEnabled(available)
+        self.view_failures_button.setEnabled(available and not self._busy)
         set_dynamic_property(
             self.view_failures_button,
             "role",
@@ -498,6 +581,13 @@ class MaintenanceTab(QWidget):
 
         self.view_failures_button.setText(
             f"View Failures ({count})" if available else "View Failures"
+        )
+
+        retryable = retryable_count > 0
+        self.retry_failures_button.setVisible(retryable)
+        self.retry_failures_button.setEnabled(retryable and not self._busy)
+        self.retry_failures_button.setText(
+            f"Retry Failed ({retryable_count})" if retryable else "Retry Failed"
         )
 
     def set_review_available(
@@ -532,6 +622,13 @@ class MaintenanceTab(QWidget):
         self.hltb_review_button.setEnabled(enabled and self._review_available)
 
         self.cancel_updates_button.setEnabled(busy)
+
+        self.view_failures_button.setEnabled(
+            enabled and self.view_failures_button.isVisible()
+        )
+        self.retry_failures_button.setEnabled(
+            enabled and self.retry_failures_button.isVisible()
+        )
 
         self.change_steam_id_button.setEnabled(enabled)
 

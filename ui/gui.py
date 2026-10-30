@@ -33,8 +33,12 @@ from storage.image_cache import clear_image_cache
 from storage.settings import (
     get_active_main_tab,
     get_appearance,
+    get_startup_refresh_library,
+    get_startup_update_missing_data,
     set_active_main_tab,
     set_appearance,
+    set_startup_refresh_library,
+    set_startup_update_missing_data,
 )
 from storage.settings import (
     get_steam_id as get_saved_steam_id,
@@ -109,7 +113,7 @@ class MainWindow(QMainWindow):
         if not self.games:
             QTimer.singleShot(0, self.first_run_setup)
         else:
-            QTimer.singleShot(0, self.start_startup_refresh)
+            QTimer.singleShot(0, self._run_configured_startup_updates)
 
     def _apply_interaction_cursors(self):
         for button in self.findChildren(QPushButton):
@@ -145,7 +149,11 @@ class MainWindow(QMainWindow):
         if not 0 <= index < self.tabs.count():
             return
 
-        set_active_main_tab(self.tabs.tabText(index))
+        tab_name = self.tabs.tabText(index)
+        set_active_main_tab(tab_name)
+
+        if tab_name == "Recommendations":
+            QTimer.singleShot(0, self.recommendations_tab.on_tab_activated)
 
     def _create_contact_tab(self):
         tab = QWidget()
@@ -249,6 +257,8 @@ class MainWindow(QMainWindow):
             bool(self.steam_api_key),
             self.appearance,
             self,
+            startup_refresh_library=get_startup_refresh_library(),
+            startup_update_missing_data=get_startup_update_missing_data(),
         )
 
         self.contact_tab = self._create_contact_tab()
@@ -302,6 +312,9 @@ class MainWindow(QMainWindow):
         self.maintenance_tab.view_failures_button.clicked.connect(
             self.show_update_failures
         )
+        self.maintenance_tab.retry_failures_button.clicked.connect(
+            self.retry_failed_updates
+        )
 
         self.maintenance_tab.change_steam_id_button.clicked.connect(
             self.change_steam_id
@@ -324,6 +337,12 @@ class MainWindow(QMainWindow):
         self.maintenance_tab.appearance_combo.currentTextChanged.connect(
             self.change_appearance
         )
+        self.maintenance_tab.startup_refresh_library_checkbox.toggled.connect(
+            set_startup_refresh_library
+        )
+        self.maintenance_tab.startup_update_missing_data_checkbox.toggled.connect(
+            set_startup_update_missing_data
+        )
 
     def _bind_update_controller(self):
         self.update_controller.status_changed.connect(self.maintenance_tab.set_status)
@@ -341,6 +360,9 @@ class MainWindow(QMainWindow):
         self.update_controller.games_changed.connect(self._games_changed)
 
         self.update_controller.data_changed.connect(self.library_tab.refresh_data)
+        self.update_controller.data_changed.connect(
+            self.recommendations_tab.notify_inputs_changed
+        )
 
         self.update_controller.error.connect(self._show_update_error)
 
@@ -406,10 +428,11 @@ class MainWindow(QMainWindow):
             "\n"
             "STARTUP UPDATES\n"
             "\n"
-            "On launch, SteamLibraryData refreshes the Steam library and then "
-            "automatically checks any missing classification, HLTB, Genre / Tags, "
-            "and achievement data. Existing completed data is not re-downloaded just "
-            "because the app started. Long updates can be cancelled from Maintenance.\n"
+            "By default, SteamLibraryData refreshes the Steam library and then "
+            "checks missing classification, HLTB, Genre / Tags, and achievement data. "
+            "Both startup steps can be enabled or disabled independently in Maintenance. "
+            "Existing completed data is not re-downloaded just because the app started. "
+            "Long updates can be cancelled from Maintenance.\n"
             "\n"
             "HOWLONGTOBEAT\n"
             "\n"
@@ -511,13 +534,39 @@ class MainWindow(QMainWindow):
 
     def _library_data_changed(self):
         self.update_controller.refresh_statuses()
-        self.recommendations_tab.refresh()
+        self.recommendations_tab.notify_inputs_changed()
 
     def start_library_refresh(self):
         self.update_controller.start_library_refresh(self.steam_id)
 
-    def start_startup_refresh(self):
-        result = self.update_controller.start_startup_refresh(self.steam_id)
+    def _run_configured_startup_updates(self):
+        refresh_library = (
+            self.maintenance_tab.startup_refresh_library_checkbox.isChecked()
+        )
+        update_missing = (
+            self.maintenance_tab.startup_update_missing_data_checkbox.isChecked()
+        )
+
+        if refresh_library:
+            self.start_startup_refresh(update_missing=update_missing)
+        elif update_missing:
+            result = self.update_controller.start_startup_missing_data(self.steam_id)
+
+            if result not in {"started", "nothing"}:
+                print(f"Startup missing-data update did not start: {result}")
+
+    def start_startup_refresh(self, update_missing=None, force=False):
+        if force:
+            update_missing = True
+        elif update_missing is None:
+            update_missing = (
+                self.maintenance_tab.startup_update_missing_data_checkbox.isChecked()
+            )
+
+        result = self.update_controller.start_startup_refresh(
+            self.steam_id,
+            update_missing=update_missing,
+        )
 
         if result not in {"started", "nothing"}:
             print(f"Startup refresh did not start: {result}")
@@ -649,6 +698,22 @@ class MainWindow(QMainWindow):
             return
 
         self.update_controller.start_changed_achievement_refresh(self.steam_id)
+
+    def retry_failed_updates(self):
+        result = self.update_controller.retry_failures(self.steam_id)
+
+        if result == "nothing":
+            QMessageBox.information(
+                self,
+                "Retry Failed",
+                "There are no retryable failed game updates.",
+            )
+        elif result == "steam_id_required":
+            QMessageBox.warning(
+                self,
+                "Retry Failed",
+                "A SteamID64 is required to retry achievement updates.",
+            )
 
     def cancel_updates(self):
         self.maintenance_tab.cancel_updates_button.setEnabled(False)
@@ -912,7 +977,7 @@ class MainWindow(QMainWindow):
         )
 
         if result == QMessageBox.StandardButton.Yes:
-            self.start_startup_refresh()
+            self.start_startup_refresh(force=True)
 
     def closeEvent(self, event):
         if self.update_controller.is_running():

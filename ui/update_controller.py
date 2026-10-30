@@ -135,6 +135,7 @@ class SteamLibraryRefreshController(QObject):
         self.worker = None
         self._existing_games = None
         self._cancel_requested = False
+        self.last_data_changed = False
 
     def is_running(self):
         return self.thread is not None and self.thread.isRunning()
@@ -145,6 +146,7 @@ class SteamLibraryRefreshController(QObject):
 
         self._existing_games = existing_games
         self._cancel_requested = False
+        self.last_data_changed = False
         self.thread = QThread()
         self.worker = SteamLibraryRefreshWorker(steam_id, self.steam_api_key)
 
@@ -181,6 +183,9 @@ class SteamLibraryRefreshController(QObject):
 
         try:
             existing_by_app_id = {game.app_id: game for game in self._existing_games}
+            incoming_app_ids = {game.app_id for game in steam_games}
+            existing_app_ids = set(existing_by_app_id)
+            data_changed = incoming_app_ids != existing_app_ids
 
             merged_games = []
 
@@ -188,6 +193,7 @@ class SteamLibraryRefreshController(QObject):
                 existing_game = existing_by_app_id.get(steam_game.app_id)
 
                 if existing_game is None:
+                    data_changed = True
                     game = steam_game
                     save_game(game)
                     merged_games.append(game)
@@ -210,11 +216,13 @@ class SteamLibraryRefreshController(QObject):
                 existing_game.last_played_timestamp = steam_game.last_played_timestamp
 
                 if changed:
+                    data_changed = True
                     save_library_fields(existing_game)
 
                 merged_games.append(existing_game)
 
             delete_games_not_in(game.app_id for game in merged_games)
+            self.last_data_changed = data_changed
 
         except Exception as error:  # noqa: BLE001
             self.failed.emit(
@@ -257,10 +265,13 @@ class UpdateController(QObject):
         self._batch_thread = None
         self._batch_worker = None
         self._batch_source = None
+        self._batch_games = []
         self._combined_threads = {}
         self._combined_workers = {}
         self._combined_progress = {}
         self._combined_total = 0
+        self._combined_games = {}
+        self._combined_context = "missing"
         self._classification_followup = None
         self._classification_followup_steam_id = None
         self._classification_followup_succeeded = False
@@ -271,6 +282,7 @@ class UpdateController(QObject):
 
         self._startup_refresh_active = False
         self._startup_steam_id = None
+        self._startup_update_missing = True
         self._library_refresh_succeeded = False
 
         self._library.succeeded.connect(self._library_succeeded)
@@ -299,16 +311,45 @@ class UpdateController(QObject):
         self._failures = []
         self.failures_changed.emit([])
 
-    def _record_item_failure(self, source, message):
+    def _record_item_failure(self, source, message, game=None):
         self._failures.append(
             {
                 "source": source,
+                "app_id": getattr(game, "app_id", None),
+                "game_name": getattr(game, "name", None),
                 "message": message,
             }
         )
 
         self.failures_changed.emit(self.failures())
         self.item_failed.emit(message)
+
+    @staticmethod
+    def _failure_game(message, games, completed):
+        if " failed for " not in str(message):
+            return None
+
+        if not 0 <= completed < len(games):
+            return None
+
+        game = games[completed]
+        return game if game.name in str(message) else None
+
+    def _record_batch_failure(self, source, message):
+        game = self._failure_game(message, self._batch_games, self._batch_completed)
+        self._record_item_failure(source, message, game)
+
+    def _record_combined_failure(self, source, message):
+        games = self._combined_games.get(source, [])
+        completed = self._combined_progress.get(source, 0)
+        game = self._failure_game(message, games, completed)
+        self._record_item_failure(source, message, game)
+
+    def _batch_status_changed(self, text):
+        self.status_changed.emit(self._batch_source, text)
+
+    def _combined_status_changed(self, source, text):
+        self.status_changed.emit(source, text)
 
     def is_running(self):
         if self._library.is_running() or self._classification.is_running():
@@ -642,26 +683,38 @@ class UpdateController(QObject):
 
         return "started"
 
-    def start_startup_refresh(self, steam_id):
+    def start_startup_refresh(self, steam_id, update_missing=True):
         if self.is_running():
             return "busy"
 
         self._startup_refresh_active = True
         self._startup_steam_id = steam_id
+        self._startup_update_missing = bool(update_missing)
 
         result = self.start_library_refresh(steam_id)
 
         if result != "started":
             self._startup_refresh_active = False
             self._startup_steam_id = None
+            self._startup_update_missing = True
 
         return result
+
+    def start_startup_missing_data(self, steam_id):
+        if self.is_running():
+            return "busy"
+
+        return self.start_all_missing(steam_id)
 
     def _library_succeeded(self, merged_games):
         self._library_refresh_succeeded = True
         self.games = merged_games
 
         self.games_changed.emit(merged_games)
+
+        if self._library.last_data_changed:
+            self.data_changed.emit()
+
         self.refresh_statuses()
 
     def _library_failed(self, message):
@@ -684,14 +737,21 @@ class UpdateController(QObject):
 
         startup_refresh = self._startup_refresh_active
         startup_steam_id = self._startup_steam_id
+        startup_update_missing = self._startup_update_missing
         library_succeeded = self._library_refresh_succeeded
 
         self._startup_refresh_active = False
         self._startup_steam_id = None
+        self._startup_update_missing = True
         self._library_refresh_succeeded = False
         self._cancel_requested = False
 
-        if startup_refresh and not was_cancelled and library_succeeded:
+        if (
+            startup_refresh
+            and startup_update_missing
+            and not was_cancelled
+            and library_succeeded
+        ):
             result = self.start_all_missing(startup_steam_id)
 
             if result == "started":
@@ -1030,6 +1090,7 @@ class UpdateController(QObject):
         self._reset_failures()
         self._cancel_requested = False
         self._batch_source = source
+        self._batch_games = list(games)
         self._batch_completed = 0
         self._batch_total = len(games)
 
@@ -1056,16 +1117,11 @@ class UpdateController(QObject):
 
         self._batch_worker.moveToThread(self._batch_thread)
         self._batch_thread.started.connect(self._batch_worker.run)
-        self._batch_worker.status_changed.connect(
-            lambda text: self.status_changed.emit(source, text)
-        )
+        self._batch_worker.status_changed.connect(self._batch_status_changed)
 
         self._batch_worker.progress_changed.connect(self._batch_progress)
         self._batch_worker.item_failed.connect(
-            lambda message, source=source: self._record_item_failure(
-                source,
-                message,
-            )
+            lambda message, source=source: self._record_batch_failure(source, message)
         )
         self._batch_worker.finished.connect(self._batch_thread.quit)
         self._batch_worker.finished.connect(self._batch_worker.deleteLater)
@@ -1102,6 +1158,7 @@ class UpdateController(QObject):
         self._batch_worker = None
         self._batch_thread = None
         self._batch_source = None
+        self._batch_games = []
         self._batch_completed = 0
         self._batch_total = 0
         self._cancel_requested = False
@@ -1183,6 +1240,8 @@ class UpdateController(QObject):
             len(hltb_games) + len(metadata_games) + len(achievement_games)
         )
         self._combined_progress = {}
+        self._combined_games = {}
+        self._combined_context = "missing"
 
         if hltb_games:
             self._combined_progress["hltb"] = 0
@@ -1234,7 +1293,10 @@ class UpdateController(QObject):
         updater,
         action_text,
         steam_id=None,
+        cancel_aware=None,
     ):
+        games = list(games)
+        self._combined_games[source] = games
         self.progress_changed.emit(source, 0, len(games), True)
 
         thread = QThread()
@@ -1248,12 +1310,15 @@ class UpdateController(QObject):
                 action_text,
             )
         else:
+            if cancel_aware is None:
+                cancel_aware = source == "hltb"
+
             worker = BatchUpdateWorker(
                 games,
                 updater,
                 self._source_title(source),
                 action_text,
-                cancel_aware=(source == "hltb"),
+                cancel_aware=cancel_aware,
             )
 
         self._combined_threads[source] = thread
@@ -1262,7 +1327,7 @@ class UpdateController(QObject):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.status_changed.connect(
-            lambda text, source=source: self.status_changed.emit(source, text)
+            lambda text, source=source: self._combined_status_changed(source, text)
         )
         worker.progress_changed.connect(
             lambda completed, total, source=source: self._combined_source_progress(
@@ -1272,9 +1337,8 @@ class UpdateController(QObject):
             )
         )
         worker.item_failed.connect(
-            lambda message, source=source: self._record_item_failure(
-                source,
-                message,
+            lambda message, source=source: self._record_combined_failure(
+                source, message
             )
         )
         worker.finished.connect(thread.quit)
@@ -1355,7 +1419,16 @@ class UpdateController(QObject):
             if not game.achievements_checked and classifier.is_backlog_eligible(game)
         )
 
-        if was_cancelled:
+        if self._combined_context == "retry":
+            if was_cancelled:
+                text = f"Retry Failed: Cancelled - {processed} processed"
+            elif failure_count:
+                text = f"Retry Failed: Complete with {failure_count} failures"
+            else:
+                text = "Retry Failed: Complete"
+
+            self.status_changed.emit("all", text)
+        elif was_cancelled:
             self.status_changed.emit(
                 "all",
                 f"Missing Data: Cancelled - {processed} processed, "
@@ -1377,8 +1450,80 @@ class UpdateController(QObject):
 
         self._combined_progress = {}
         self._combined_total = 0
+        self._combined_games = {}
+        self._combined_context = "missing"
         self._cancel_requested = False
         self.busy_changed.emit(self.is_running())
+
+    def retry_failures(self, steam_id=None):
+        if self.is_running():
+            return "busy"
+
+        games_by_id = {game.app_id: game for game in self.games}
+        grouped = {"hltb": [], "metadata": [], "achievements": []}
+
+        for failure in self._failures:
+            source = failure.get("source")
+            app_id = failure.get("app_id")
+
+            if source not in grouped or app_id is None:
+                continue
+
+            game = games_by_id.get(app_id)
+
+            if game is not None and game not in grouped[source]:
+                grouped[source].append(game)
+
+        if not any(grouped.values()):
+            return "nothing"
+
+        if grouped["achievements"] and steam_id is None:
+            return "steam_id_required"
+
+        self._reset_failures()
+        self._cancel_requested = False
+        self._combined_context = "retry"
+        self._combined_total = sum(len(games) for games in grouped.values())
+        self._combined_progress = {
+            source: 0 for source, games in grouped.items() if games
+        }
+        self._combined_games = {}
+
+        self.status_changed.emit("all", "Retry Failed: Updating...")
+        self.progress_changed.emit("all", 0, self._combined_total, True)
+
+        if grouped["hltb"]:
+
+            def fresh_hltb(game, cancel_requested=None):
+                update_hltb(game)
+
+            self._start_combined_source(
+                source="hltb",
+                games=grouped["hltb"],
+                updater=fresh_hltb,
+                action_text="Retrying HLTB for",
+                cancel_aware=False,
+            )
+
+        if grouped["metadata"]:
+            self._start_combined_source(
+                source="metadata",
+                games=grouped["metadata"],
+                updater=update_metadata,
+                action_text="Retrying metadata for",
+            )
+
+        if grouped["achievements"]:
+            self._start_combined_source(
+                source="achievements",
+                games=grouped["achievements"],
+                updater=None,
+                action_text="Retrying achievements for",
+                steam_id=steam_id,
+            )
+
+        self.busy_changed.emit(True)
+        return "started"
 
     def cancel(self):
         if not self.is_running():
@@ -1412,9 +1557,12 @@ class UpdateController(QObject):
             self._batch_worker.cancel()
 
         if self._combined_workers:
+            label = (
+                "Retry Failed" if self._combined_context == "retry" else "Missing Data"
+            )
             self.status_changed.emit(
                 "all",
-                "Missing Data: Stopping...",
+                f"{label}: Stopping...",
             )
 
             for worker in self._combined_workers.values():
