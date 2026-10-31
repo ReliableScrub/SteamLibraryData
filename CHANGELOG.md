@@ -4,6 +4,8 @@ All notable changes to SteamLibraryData will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0]
+
 ### Added
 - Added F1 shortcut for Help / FAQ.
 - Added F5 shortcut for Steam Library refresh.

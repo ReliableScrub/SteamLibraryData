@@ -107,12 +107,31 @@ def test_failure_button_tracks_failure_availability(maintenance_tab):
 
     assert maintenance_tab.view_failures_button.isHidden()
     assert not maintenance_tab.view_failures_button.isEnabled()
+    assert maintenance_tab.retry_failures_button.isHidden()
+    assert not maintenance_tab.retry_failures_button.isEnabled()
 
-    maintenance_tab.set_failures(["one", "two"])
+    maintenance_tab.set_failures(
+        [
+            {
+                "source": "hltb",
+                "app_id": 10,
+                "message": "one",
+            },
+            {
+                "source": "library",
+                "app_id": None,
+                "message": "two",
+            },
+        ]
+    )
 
     assert not maintenance_tab.view_failures_button.isHidden()
     assert maintenance_tab.view_failures_button.isEnabled()
     assert maintenance_tab.view_failures_button.text() == "View Failures (2)"
+
+    assert not maintenance_tab.retry_failures_button.isHidden()
+    assert maintenance_tab.retry_failures_button.isEnabled()
+    assert maintenance_tab.retry_failures_button.text() == "Retry Failed (1)"
 
 
 def test_main_window_bindings_do_not_reference_removed_buttons():

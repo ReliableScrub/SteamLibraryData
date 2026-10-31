@@ -43,7 +43,7 @@ def load_settings():
 
 def save_settings(settings):
     if not isinstance(settings, dict):
-        raise ValueError("Settings must be saved as a dictionary.")
+        raise TypeError("Settings must be saved as a dictionary.")
 
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary = SETTINGS_FILE.with_name(f".{SETTINGS_FILE.name}.{time.time_ns()}.tmp")
